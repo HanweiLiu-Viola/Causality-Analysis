@@ -52,10 +52,10 @@ The simulation models implemented in this project are adapted from:
 > Multivariate Time-Series. *Frontiers in Systems Neuroscience*, 15,
 > 620338. https://doi.org/10.3389/fnsys.2021.620338
 
+![Simulation Models](figures/simulation_models.webp)
+
 All models generate 5-node time series with known directed connectivity.
 Unified entry point: `simulate(model, T=1000, seed=None, **kwargs)`.
-
-![Simulation Models](figures/simulation_models.webp)
 
 
 | Key | Function | Ground Truth Connectivity | Notes |
