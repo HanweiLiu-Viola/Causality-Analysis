@@ -55,6 +55,9 @@ The simulation models implemented in this project are adapted from:
 All models generate 5-node time series with known directed connectivity.
 Unified entry point: `simulate(model, T=1000, seed=None, **kwargs)`.
 
+![Simulation Models](figures/simulation_models.webp)
+
+
 | Key | Function | Ground Truth Connectivity | Notes |
 |---|---|---|---|
 | `random` | `random_system` | x1→x2, x1→x3, x4→x5 | Fixed delays (2–5 samples), linear |
