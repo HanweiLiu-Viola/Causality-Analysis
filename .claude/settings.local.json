@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt 2>&1)",
+      "Bash(source .venv/bin/activate && pip install -r requirements.txt 2>&1)",
+      "Bash(rm -rf .venv && python3 -m venv fc_jupyter)",
+      "Bash(conda run:*)",
+      "Bash(PYTHON=\"/mnt/c/Users/viola/anaconda3/envs/fc_jupyter/python.exe\"\nJUPYTER=\"/mnt/c/Users/viola/anaconda3/envs/fc_jupyter/Scripts/jupyter.exe\"\n$PYTHON -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(PYTHON=\"/mnt/c/Users/viola/anaconda3/envs/fc_jupyter/python.exe\"\n$PYTHON -c \"import nbconvert; print\\(nbconvert.__version__\\)\")",
+      "Bash(PYTHON=\"/mnt/c/Users/viola/anaconda3/envs/fc_jupyter/python.exe\"\n$PYTHON -c \"import nbformat; import jupyter_client; print\\('ok'\\)\" 2>&1)",
+      "Bash(PYTHON=\"/mnt/c/Users/viola/anaconda3/envs/fc_jupyter/python.exe\"\n$PYTHON -m pip install nbconvert nbformat ipykernel --quiet 2>&1 | tail -5)",
+      "Bash(/mnt/c/Users/viola/anaconda3/envs/chen/python.exe -c \"import docx; print\\('ok'\\)\" 2>&1)",
+      "Bash(/mnt/c/Users/viola/anaconda3/envs/chen/python.exe -m pip install python-docx -q 2>&1 | tail -5)",
+      "Bash(ls \"/mnt/c/Users/viola/Documents/UKW/INF/Causality-Analysis-main/Causality-Analysis/\"*.docx 2>/dev/null)",
+      "Bash(/mnt/c/Users/viola/anaconda3/envs/chen/python.exe -c \"\nimport docx\ndoc = docx.Document\\('/tmp/manuscript.docx'\\)\nfor para in doc.paragraphs:\n    if para.text.strip\\(\\):\n        print\\(f'[STYLE:{para.style.name}] {para.text}'\\)\n\" 2>&1 | head -100)"
+    ]
+  }
+}
