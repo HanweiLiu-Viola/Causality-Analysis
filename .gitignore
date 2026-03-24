@@ -1,0 +1,51 @@
+# =============================================================
+# .gitignore — Causality Analysis
+# =============================================================
+
+# ----- Generated data (too large for Git) --------------------
+data/*.npz
+data/*.pkl
+data/bids/
+
+# Keep the data/ directory itself in the repo
+!data/.gitkeep
+
+# ----- Figures (reproducible from notebooks) -----------------
+figures/*.pdf
+figures/*.png
+# Keep the directory
+!figures/.gitkeep
+
+# ----- Executed notebooks (noisy diffs) ----------------------
+notebooks/*_executed.ipynb
+
+# ----- Logs --------------------------------------------------
+logs/
+*.log
+
+# ----- Container image files (too large) ---------------------
+*.sif
+*.simg
+
+# ----- Python ------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.installed.cfg
+*.egg
+.venv/
+env/
+venv/
+
+# ----- Jupyter -----------------------------------------------
+.ipynb_checkpoints/
+
+# ----- OS / Editor -------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
