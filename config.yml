@@ -1,0 +1,31 @@
+# config.yml — Snakemake workflow configuration
+# Edit these values to change the pipeline behaviour.
+
+# ── Simulation parameters ─────────────────────────────────────────────────────
+n_subjects: 25          # subjects in the benchmark  (25 = full run)
+n_epochs:   5           # epochs per subject × model
+t:          1000        # time points per epoch
+fs:         256         # sampling frequency (Hz)
+models:
+  - random
+  - henon
+  - lorenz
+  - sweep
+  - cascadear
+  - freqarlin
+  - freqarnonlin
+
+# ── FC benchmark parameters ───────────────────────────────────────────────────
+percentile:  75         # binarisation threshold (top-N% of off-diagonal values)
+methods:
+  - ADTF
+  - PDCoh
+  - DTF
+  - cGC
+  - PLI
+  - PSI
+
+# ── BIDS conversion parameters ────────────────────────────────────────────────
+bids_n_subjects: 5      # subjects written to data/bids/
+bids_model:   "random"  # simulation model used for BIDS subjects
+bids_seed:    42        # base random seed
