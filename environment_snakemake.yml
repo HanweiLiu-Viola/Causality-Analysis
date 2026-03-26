@@ -1,0 +1,9 @@
+name: snakemake-host
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - snakemake>=8.0
+  - pip
+  

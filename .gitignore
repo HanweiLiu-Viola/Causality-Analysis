@@ -5,6 +5,8 @@
 # ----- Generated data (too large for Git) --------------------
 data/*.npz
 data/*.pkl
+data/*.zip
+data/*.rar
 data/bids/
 
 # Keep the data/ directory itself in the repo
@@ -16,12 +18,17 @@ figures/*.png
 # Keep the directory
 !figures/.gitkeep
 
+# ----- Snakemake --------------------------------------------------
+.snakemake/
+*.dot
+
 # ----- Executed notebooks (noisy diffs) ----------------------
 notebooks/*_executed.ipynb
 
 # ----- Logs --------------------------------------------------
 logs/
 *.log
+
 
 # ----- Container image files (too large) ---------------------
 *.sif
