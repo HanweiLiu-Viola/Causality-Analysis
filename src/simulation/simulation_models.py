@@ -1,374 +1,740 @@
+"""Synthetic time-series simulation models with known ground-truth connectivity.
+
+Each model generates a ``(5, T)`` array representing five multivariate channels.
+All models share the same channel count (``N_CHANNELS = 5``) and expose a single
+``simulate()`` entry point for uniform access.
+
+Ground-truth directed edges (source -> target, 1-indexed) per model:
+    random      : 1->2 (delay 3), 1->3 (delay 2), 4->5 (delay 5)
+    henon       : 1->2, 2->3, 4->5
+    lorenz      : 1->2, 2->3, 3->4, 4->5
+    sweep       : 1->2 (delay 2 samples), 1->3 (delay 4 samples)
+    cascadear   : 1<->2<->3<->4<->5 (bidirectional chain)
+    pinkarlin   : 1->2, 1->3, 1->4, 4<->5
+    pinkarnonlin: same structure as pinkarlin (quadratic coupling)
+    freqarlin   : 1->2 (gamma), 1->3 (gamma), 1->4 (alpha), 4->5 (gamma)
+    freqarnonlin: same structure as freqarlin (quadratic coupling)
+"""
+
+import logging
+from collections.abc import Callable
+
 import numpy as np
-from scipy.signal import butter, filtfilt
 from scipy.integrate import solve_ivp
-# from numba import njit
+from scipy.signal import butter, filtfilt
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+N_CHANNELS = 5  # number of channels produced by every model
+
+# Hénon map parameters — classic chaotic regime (Hénon 1976)
+HENON_A = 1.4
+HENON_B = 0.3
+
+# Lorenz system parameters — classic chaotic regime (Lorenz 1963)
+LORENZ_SIGMA = 10.0
+LORENZ_RHO = 28.0
+LORENZ_BETA = 8.0 / 3.0
+
+# AR model spectral-radius coefficient
+AR_RHO = 0.95          # pole radius; keeps AR(2) stationary
+AR_STABLE = AR_RHO**2  # = 0.9025, second AR(2) coefficient
+
+# Frequency bands used by freq_ar (Hz)
+ALPHA_LOW: float = 8.0
+ALPHA_HIGH: float = 12.0
+GAMMA_LOW: float = 25.0
+
+# Safety margin so the high cutoff never reaches exactly Nyquist
+NYQUIST_SAFETY: float = 0.99
+
+# Seizure sweep: instantaneous frequency decreases from START to END (Hz)
+SWEEP_F_START: float = 12.0
+SWEEP_F_END: float = 8.0
+
+# Ordered model keys used for integer-indexed access in simulate()
+_MODEL_KEYS: list[str] = [
+    "random",
+    "henon",
+    "lorenz",
+    "sweep",
+    "cascadear",
+    "pinkarlin",
+    "pinkarnonlin",
+    "freqarlin",
+    "freqarnonlin",
+]
 
 
-def generate_pink_noise(N):
-    """Approximate pink noise using power-law scaling."""
-    uneven = N % 2
-    X = np.random.randn(N // 2 + 1 + uneven) + 1j * np.random.randn(N // 2 + 1 + uneven)
-    S = np.sqrt(1.0 / np.arange(1, len(X) + 1))
-    y = (np.fft.irfft(X * S)).real
-    y = y - np.mean(y)
-    return y / np.std(y)
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
 
-def bandpass(data, low, high, fs, order=4):
-    nyq = 0.5 * fs
-    high = min(high, nyq * 0.99)
+
+def _resolve_rng(rng: np.random.Generator | None) -> np.random.Generator:
+    """Return the given generator, or create a new unseeded one."""
+    return rng if rng is not None else np.random.default_rng()
+
+
+def _zscore(x: np.ndarray) -> np.ndarray:
+    """Z-score normalize each row of a 2-D array in place.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Shape (n_channels, n_samples).
+
+    Returns
+    -------
+    np.ndarray
+        Row-wise z-scored copy of x.
+    """
+    mean = x.mean(axis=1, keepdims=True)
+    std = x.std(axis=1, keepdims=True)
+    return (x - mean) / std
+
+
+# ---------------------------------------------------------------------------
+# Public helpers (used across models)
+# ---------------------------------------------------------------------------
+
+
+def generate_pink_noise(
+    n_samples: int,
+    *,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate approximate pink (1/f) noise using power-law spectral scaling.
+
+    Produces a zero-mean, unit-variance signal whose power spectrum decays as
+    1/f. The approximation is achieved by scaling white-noise Fourier coefficients
+    and inverting the transform.
+
+    Parameters
+    ----------
+    n_samples : int
+        Length of the output signal in samples.
+    rng : np.random.Generator, optional
+        Random generator for reproducibility. A new generator is created if None.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (n_samples,), zero-mean and unit-variance.
+    """
+    rng = _resolve_rng(rng)
+    n_freq = n_samples // 2 + 1 + (n_samples % 2)
+    spectrum = (rng.standard_normal(n_freq) + 1j * rng.standard_normal(n_freq))
+    spectrum *= np.sqrt(1.0 / np.arange(1, n_freq + 1))
+    signal = np.fft.irfft(spectrum).real[:n_samples]
+    signal -= signal.mean()
+    return signal / signal.std()
+
+
+def bandpass(
+    data: np.ndarray,
+    low: float,
+    high: float,
+    fs: float,
+    *,
+    order: int = 4,
+) -> np.ndarray:
+    """Apply a zero-phase Butterworth bandpass filter to a 1-D signal.
+
+    The high cutoff is clamped to ``NYQUIST_SAFETY * fs/2`` to prevent filter
+    instability at the Nyquist boundary.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        1-D input signal.
+    low : float
+        Lower cutoff frequency in Hz.
+    high : float
+        Upper cutoff frequency in Hz.
+    fs : float
+        Sampling frequency in Hz.
+    order : int
+        Butterworth filter order. Default: 4.
+
+    Returns
+    -------
+    np.ndarray
+        Filtered signal, same shape as data.
+
+    Raises
+    ------
+    ValueError
+        If low >= high after clamping the high cutoff.
+    """
+    nyquist = 0.5 * fs
+    high = min(high, nyquist * NYQUIST_SAFETY)
     if low >= high:
-        raise ValueError("Low cutoff must be smaller than high cutoff!")
-    b, a = butter(order, [low/nyq, high/nyq], btype='band')
+        raise ValueError(
+            f"Low cutoff {low} Hz must be less than high cutoff {high:.2f} Hz "
+            f"(after clamping to {NYQUIST_SAFETY} * Nyquist)."
+        )
+    b, a = butter(order, [low / nyquist, high / nyquist], btype="band")
     return filtfilt(b, a, data)
 
-def zscore_normalize(x):
-    return (x - np.mean(x, axis=1, keepdims=True)) / np.std(x, axis=1, keepdims=True)
+
+# ---------------------------------------------------------------------------
+# Simulation models
+# ---------------------------------------------------------------------------
 
 
-# ============== 每个模型的生成器 ==================
+def random_system(
+    T: int = 1000,
+    *,
+    c: float = 0.5,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a 5-channel linear delay system with two independent sub-networks.
 
-def random_system(T=1000, c=0.5):
+    Sub-network A (channels 1–3): channel 1 drives channels 2 and 3 with delays.
+    Sub-network B (channels 4–5): channel 4 drives channel 5 with a delay.
+    Ground-truth edges: 1->2 (delay 3), 1->3 (delay 2), 4->5 (delay 5).
 
-  # Initialize
-  N=5
-  x = np.zeros((N, T))
-  w = np.random.randn(N, T)
-  delays = [0, 3, 2, 0, 5]
+    Parameters
+    ----------
+    T : int
+        Number of time samples. Default: 1000.
+    c : float
+        Coupling strength in [0, 1]; weight given to the lagged source signal.
+        Default: 0.5.
+    rng : np.random.Generator, optional
+        Random generator for reproducibility.
 
-  # x1 and x4: pure noise
-  x[0] = w[0]
-  x[3] = w[3]
+    Returns
+    -------
+    np.ndarray
+        Shape (5, T), z-score normalized per channel.
+    """
+    rng = _resolve_rng(rng)
+    # Propagation delays indexed by channel (0-based); 0 means no coupling
+    delays = [0, 3, 2, 0, 5]
+    x = np.zeros((N_CHANNELS, T))
+    w = rng.standard_normal((N_CHANNELS, T))
 
-  # x2: depends on x1 with delay 3
-  d = delays[1]
-  x[1, :d] = (1 - c) * w[1, :d]
-  x[1, d:] = (1 - c) * w[1, d:] + c * x[0, :-d]
+    # Channels 1 and 4 (0-indexed: 0 and 3) are pure independent noise sources
+    x[0] = w[0]
+    x[3] = w[3]
 
-  # x3: depends on x1 with delay 2
-  d = delays[2]
-  x[2, :d] = (1 - c) * w[2, :d]
-  x[2, d:] = (1 - c) * w[2, d:] + c * x[0, :-d]
+    # Each driven channel is a weighted mixture of its own noise and a lagged source
+    for target_idx, source_idx, delay_idx in [(1, 0, 1), (2, 0, 2), (4, 3, 4)]:
+        d = delays[delay_idx]
+        x[target_idx, :d] = (1 - c) * w[target_idx, :d]
+        x[target_idx, d:] = (1 - c) * w[target_idx, d:] + c * x[source_idx, :-d]
 
-  # x5: depends on x4 with delay 5
-  d = delays[4]
-  x[4, :d] = (1 - c) * w[4, :d]
-  x[4, d:] = (1 - c) * w[4, d:] + c * x[3, :-d]
+    return _zscore(x)
 
-  x = zscore_normalize(x)
-  return x
 
-def henon_system(T=1000, c=0.5):
-    N = 5
-    x = np.zeros((N, T))
-    x[:, :2] = np.random.randn(N, 2) * 0.1
+def henon_system(
+    T: int = 1000,
+    *,
+    c: float = 0.5,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a 5-channel unidirectional chain of coupled Hénon maps.
+
+    Channels 1 and 4 are autonomous Hénon oscillators. Coupled channels replace
+    the self-squared term with a cross-channel product scaled by coupling strength c.
+    Ground-truth edges: 1->2, 2->3, 4->5.
+
+    Parameters
+    ----------
+    T : int
+        Number of time samples. Default: 1000.
+    c : float
+        Coupling strength. At c=0 all channels are autonomous; at c=1 the target
+        is fully replaced by cross-channel dynamics. Default: 0.5.
+    rng : np.random.Generator, optional
+        Random generator for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (5, T), z-score normalized per channel.
+    """
+    rng = _resolve_rng(rng)
+    x = np.zeros((N_CHANNELS, T))
+    # Small random initialisation to avoid early-transient divergence
+    x[:, :2] = rng.standard_normal((N_CHANNELS, 2)) * 0.1
+
     for t in range(2, T):
-        x1_1, x1_2 = x[0, t-1], x[0, t-2]
-        x2_1, x2_2 = x[1, t-1], x[1, t-2]
-        x3_1, x3_2 = x[2, t-1], x[2, t-2]
-        x4_1, x4_2 = x[3, t-1], x[3, t-2]
-        x5_1, x5_2 = x[4, t-1], x[4, t-2]
+        # Autonomous Hénon map: x[n] = A - x[n-1]^2 + B * x[n-2]
+        x[0, t] = HENON_A - x[0, t - 1] ** 2 + HENON_B * x[0, t - 2]
+        x[3, t] = HENON_A - x[3, t - 1] ** 2 + HENON_B * x[3, t - 2]
 
-        x[0, t] = 1.4 - x1_1**2 + 0.3 * x1_2
-        x[1, t] = 1.4 - c * x1_1 * x2_1 + 0.3 * x2_2
-        x[2, t] = 1.4 - c * x2_1 * x3_1 + 0.3 * x3_2
-        x[3, t] = 1.4 - x4_1**2 + 0.3 * x4_2
-        x[4, t] = 1.4 - c * x4_1 * x5_1 + 0.3 * x5_2
+        # Coupled channels: x_i[n-1]^2 term is replaced by c * x_{i-1}[n-1] * x_i[n-1]
+        x[1, t] = HENON_A - c * x[0, t - 1] * x[1, t - 1] + HENON_B * x[1, t - 2]
+        x[2, t] = HENON_A - c * x[1, t - 1] * x[2, t - 1] + HENON_B * x[2, t - 2]
+        x[4, t] = HENON_A - c * x[3, t - 1] * x[4, t - 1] + HENON_B * x[4, t - 2]
 
-    x = zscore_normalize(x)
-    return x
+    return _zscore(x)
 
-def lorenz_chain(t, y, N, c):
+
+def _lorenz_ode(
+    t: float,
+    y: np.ndarray,
+    n_systems: int,
+    c: float,
+) -> np.ndarray:
+    """ODE right-hand side for N unidirectionally coupled Lorenz oscillators.
+
+    Internal helper passed to ``scipy.integrate.solve_ivp``.
+    State layout: [x1, y1, z1, x2, y2, z2, ..., xN, yN, zN].
+
+    Parameters
+    ----------
+    t : float
+        Current time (required by solve_ivp interface; unused internally).
+    y : np.ndarray
+        State vector of length 3 * n_systems.
+    n_systems : int
+        Number of Lorenz oscillators in the chain.
+    c : float
+        Unidirectional coupling strength from x_{i-1} to x_i.
+
+    Returns
+    -------
+    np.ndarray
+        Derivative vector, same shape as y.
+    """
     dydt = np.zeros_like(y)
-    for i in range(N):
-        xi, yi, zi = y[3*i:3*(i+1)]
-        dx = 10 * (yi - xi)
-        dy = 28 * xi - yi - xi * zi
-        dz = xi * yi - 8/3 * zi
+    for i in range(n_systems):
+        xi, yi, zi = y[3 * i : 3 * (i + 1)]
+        dx = LORENZ_SIGMA * (yi - xi)
+        dy = LORENZ_RHO * xi - yi - xi * zi
+        dz = xi * yi - LORENZ_BETA * zi
 
-        # Add coupling for all but first system
+        # Each oscillator (except the first) is driven by the x-component of its predecessor
         if i > 0:
-            x_prev = y[3*(i-1)]
+            x_prev = y[3 * (i - 1)]
             dx += c * (x_prev - xi)
 
-        dydt[3*i:3*(i+1)] = [dx, dy, dz]
+        dydt[3 * i : 3 * (i + 1)] = [dx, dy, dz]
 
     return dydt
 
 
-def lorenz_system(T=1000, sampling_period=0.5, dt=0.01, c=4.0):
+def lorenz_system(
+    T: int = 1000,
+    *,
+    sampling_period: float = 0.5,
+    dt: float = 0.01,
+    c: float = 4.0,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a 5-channel unidirectional chain of coupled Lorenz oscillators.
+
+    The continuous-time system is integrated with RK45 at step dt and subsampled
+    to T points separated by sampling_period.
+    Ground-truth edges: 1->2, 2->3, 3->4, 4->5.
+
+    Parameters
+    ----------
+    T : int
+        Number of output time samples. Default: 1000.
+    sampling_period : float
+        Physical time (seconds) between consecutive output samples. Default: 0.5.
+    dt : float
+        Integration step size (seconds). Default: 0.01.
+    c : float
+        Coupling strength between adjacent oscillators. Default: 4.0.
+    rng : np.random.Generator, optional
+        Random generator for initial conditions.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (5, T), z-score normalized x-components of each oscillator.
     """
-    Simulate 5 coupled Lorenz systems in a chain: x1->x2->x3->x4->x5
-    Returns:
-        X: array (5, T) -- sampled x components
-    """
-    N = 5
-    steps_per_sample = int(sampling_period / dt)
-    total_steps = T * steps_per_sample
-    t_span = (0, total_steps * dt)
+    rng = _resolve_rng(rng)
+    total_steps = T * int(sampling_period / dt)
+    t_span = (0.0, total_steps * dt)
     t_eval = np.arange(0, total_steps * dt, sampling_period)
 
-    # Initial condition: random for each (x,y,z)
-    y0 = np.random.rand(3 * N) * 5.0
-
+    y0 = rng.random(3 * N_CHANNELS) * 5.0
     sol = solve_ivp(
-        lorenz_chain,
+        _lorenz_ode,
         t_span,
         y0,
-        method='RK45',
+        method="RK45",
         t_eval=t_eval,
-        args=(N, c),
+        args=(N_CHANNELS, c),
         rtol=1e-6,
-        atol=1e-9
+        atol=1e-9,
     )
 
-    # Extract only the x components
-    x = sol.y[::3, :]
-    x = zscore_normalize(x)
-    return x
+    # Extract x-components (every 3rd state variable) and trim to exactly T samples
+    x = sol.y[::3, :T]
+    return _zscore(x)
 
-def seizure_sweep(T=1000, fs=256, snr_db=-5):
-    """
-    Fast implementation for the 'Sweep' seizure model.
-    """
-    t = np.arange(T) / fs
 
-    # Instantaneous frequency: linear from 12 Hz to 8 Hz
-    f0, f1 = 12, 8
-    ft = f0 + (f1 - f0) * (t / t[-1])
-    phase = 2 * np.pi * np.cumsum(ft) / fs
+def seizure_sweep(
+    T: int = 1000,
+    *,
+    fs: float = 256.0,
+    snr_db: float = -5.0,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a 5-channel seizure propagation model with a frequency-sweeping source.
+
+    Channel 1 carries a seizure oscillation that sweeps from SWEEP_F_START to
+    SWEEP_F_END Hz, embedded in pink noise at the requested SNR. The seizure
+    propagates to channels 2 and 3 with fixed sample delays. Channels 4 and 5
+    are independent pink noise.
+    Ground-truth edges: 1->2 (delay 2 samples), 1->3 (delay 4 samples).
+
+    Parameters
+    ----------
+    T : int
+        Number of time samples. Default: 1000.
+    fs : float
+        Sampling frequency in Hz. Default: 256.0.
+    snr_db : float
+        Signal-to-noise ratio in dB (negative = noise-dominated). Default: -5.
+    rng : np.random.Generator, optional
+        Random generator for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (5, T), z-score normalized per channel.
+    """
+    rng = _resolve_rng(rng)
+    time_vec = np.arange(T) / fs
+
+    # Instantaneous frequency decreases linearly from SWEEP_F_START to SWEEP_F_END
+    inst_freq = SWEEP_F_START + (SWEEP_F_END - SWEEP_F_START) * (time_vec / time_vec[-1])
+    phase = 2 * np.pi * np.cumsum(inst_freq) / fs
     seizure = np.sin(phase)
 
-    # Compute signal power
-    Ps = np.mean(seizure**2)
+    # Scale noise so that signal power / noise power equals 10^(snr_db/10)
+    noises = np.array([generate_pink_noise(T, rng=rng) for _ in range(N_CHANNELS)])
+    signal_power = np.mean(seizure**2)
+    noise_power = np.mean(noises[0] ** 2)
+    noise_scale = np.sqrt(signal_power / (10 ** (snr_db / 10)) / noise_power)
+    noises *= noise_scale
 
-    # Generate 5 pink noises
-    noises = np.array([generate_pink_noise(T) for _ in range(5)])
-    Pn = np.mean(noises[0]**2)
-    scale = np.sqrt(Ps / (10**(snr_db/10)) / Pn)
-    noises *= scale
+    x = np.zeros((N_CHANNELS, T))
+    x[0] = seizure + noises[0]
 
-    X = np.zeros((5, T))
-    X[0] = seizure + noises[0]
+    # Propagation: channel 1 drives channels 2 and 3 with 2- and 4-sample delays
+    x[1] = noises[1]
+    x[2] = noises[2]
+    x[1, 2:] += x[0, :-2]
+    x[2, 4:] += x[0, :-4]
 
-    # Propagation with delays
-    X[1] = noises[1]
-    X[2] = noises[2]
-    X[1, 2:] += X[0, :-2]
-    X[2, 4:] += X[0, :-4]
+    # Channels 4 and 5: uncoupled, pure noise
+    x[3] = noises[3]
+    x[4] = noises[4]
 
-    # Pure noise channels
-    X[3] = noises[3]
-    X[4] = noises[4]
-
-    X = zscore_normalize(X)
-    return X
+    return _zscore(x)
 
 
-def cascade_ar(T=1000, c=0.8, rho=0.9):
+def cascade_ar(
+    T: int = 1000,
+    *,
+    c: float = 0.8,
+    rho: float = 0.9,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a 5-channel bidirectional AR cascade model.
+
+    Interior channels are each driven by their two immediate neighbours plus own
+    AR(2) dynamics. The AR(2) coefficients are derived from spectral radius rho
+    (poles at rho * e^(±j*pi/4)) to produce oscillatory but stationary dynamics.
+    Ground-truth edges: 1<->2<->3<->4<->5.
+
+    Parameters
+    ----------
+    T : int
+        Number of time samples. Default: 1000.
+    c : float
+        Coupling strength in [0, 1]. At c=0 all channels are independent AR(2).
+        Default: 0.8.
+    rho : float
+        AR spectral radius in (0, 1); controls oscillation frequency. Default: 0.9.
+    rng : np.random.Generator, optional
+        Random generator for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (5, T), z-score normalized per channel.
     """
-    Simulate one realization of the Cascade AR model.
-    """
-    K = 5  # number of variables
+    rng = _resolve_rng(rng)
+    theta = np.array([generate_pink_noise(T, rng=rng) for _ in range(N_CHANNELS)])
+    x = np.zeros((N_CHANNELS, T))
 
-    # Generate 5 pink noises
-    theta = np.array([generate_pink_noise(T) for _ in range(K)])
-
-    x = np.zeros((K, T))
-
-    sqrt2rho = np.sqrt(2) * rho
-    rho2 = rho ** 2
+    # AR(2) coefficients: x[t] = ar1*x[t-1] - ar2*x[t-2] gives poles at rho*e^(±j*pi/4)
+    ar1_coeff = np.sqrt(2) * rho
+    ar2_coeff = rho**2
 
     for t in range(2, T):
-        # x1 and x5: pure AR(2)
-        x[0, t] = sqrt2rho * x[0, t-1] - rho2 * x[0, t-2] + theta[0, t]
-        x[4, t] = sqrt2rho * x[4, t-1] - rho2 * x[4, t-2] + theta[4, t]
+        # Channels 1 and 5: autonomous AR(2) processes (no neighbours)
+        x[0, t] = ar1_coeff * x[0, t - 1] - ar2_coeff * x[0, t - 2] + theta[0, t]
+        x[4, t] = ar1_coeff * x[4, t - 1] - ar2_coeff * x[4, t - 2] + theta[4, t]
 
-        # x2: driven by x1 and x3
-        x[1, t] = (0.5 * c * (x[0, t-1] + x[2, t-1])
-                   + (1 - c) * (sqrt2rho * x[1, t-1] - rho2 * x[1, t-2])
-                   + theta[1, t])
+        # Interior channels: equally weighted mixture of both neighbours and own AR(2)
+        x[1, t] = (
+            0.5 * c * (x[0, t - 1] + x[2, t - 1])
+            + (1 - c) * (ar1_coeff * x[1, t - 1] - ar2_coeff * x[1, t - 2])
+            + theta[1, t]
+        )
+        x[2, t] = (
+            0.5 * c * (x[1, t - 1] + x[3, t - 1])
+            + (1 - c) * (ar1_coeff * x[2, t - 1] - ar2_coeff * x[2, t - 2])
+            + theta[2, t]
+        )
+        x[3, t] = (
+            0.5 * c * (x[2, t - 1] + x[4, t - 1])
+            + (1 - c) * (ar1_coeff * x[3, t - 1] - ar2_coeff * x[3, t - 2])
+            + theta[3, t]
+        )
 
-        # x3: driven by x2 and x4
-        x[2, t] = (0.5 * c * (x[1, t-1] + x[3, t-1])
-                   + (1 - c) * (sqrt2rho * x[2, t-1] - rho2 * x[2, t-2])
-                   + theta[2, t])
-
-        # x4: driven by x3 and x5
-        x[3, t] = (0.5 * c * (x[2, t-1] + x[4, t-1])
-                   + (1 - c) * (sqrt2rho * x[3, t-1] - rho2 * x[3, t-2])
-                   + theta[3, t])
-
-    x = zscore_normalize(x)
-    return x
+    return _zscore(x)
 
 
+def pink_ar(
+    T: int = 1000,
+    *,
+    nonlinear: bool = False,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a 5-channel pink-noise-driven AR model.
 
-def pink_ar(T=1000, nonlinear=False):
+    Channel 1 is an autonomous AR(2) oscillator. It drives channels 2, 3, and 4
+    via lagged linear (or quadratic) couplings. Channels 4 and 5 have a
+    bidirectional AR(1) interaction.
+    Ground-truth edges: 1->2, 1->3, 1->4, 4<->5.
+
+    Parameters
+    ----------
+    T : int
+        Number of time samples. Default: 1000.
+    nonlinear : bool
+        If True, coupling from channel 1 to channels 2 and 4 uses the squared
+        signal (quadratic interaction). Default: False.
+    rng : np.random.Generator, optional
+        Random generator for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (5, T), z-score normalized per channel.
     """
-    Simulate one realization of Pink AR linear or nonlinear model.
-    - nonlinear = True: quadratic interactions for X1->X2 and X1->X4.
-    """
-    K = 5
-    theta = np.array([generate_pink_noise(T) for _ in range(K)])
-    x = np.zeros((K, T))
-    sqrt2 = np.sqrt(2)
+    rng = _resolve_rng(rng)
+    theta = np.array([generate_pink_noise(T, rng=rng) for _ in range(N_CHANNELS)])
+    x = np.zeros((N_CHANNELS, T))
+
+    # AR(2) coefficient for channel 1: spectral radius AR_RHO at lag 2
+    ar2_coeff = AR_RHO * np.sqrt(2)
+    # AR(1) weight used for the bidirectional channel-4/5 interaction
+    ar1_weight = 0.25 * np.sqrt(2)
 
     for t in range(3, T):
-        # x1: AR(2)
-        x[0, t] = 0.95 * sqrt2 * x[0, t-2] + theta[0, t]
+        x[0, t] = ar2_coeff * x[0, t - 2] + theta[0, t]
 
-        # X1 -> X2, quadratic if nonlinear
-        if nonlinear:
-            x[1, t] = 0.5 * (x[0, t-2] ** 2) + theta[1, t]
-        else:
-            x[1, t] = 0.5 * x[0, t-2] + theta[1, t]
+        # Linear or quadratic driver from channel 1 at lag 2
+        driver_1 = x[0, t - 2] ** 2 if nonlinear else x[0, t - 2]
+        x[1, t] = 0.5 * driver_1 + theta[1, t]
 
-        # X1 -> X3: always linear
-        x[2, t] = -0.4 * x[0, t-3] + theta[2, t]
+        # Channel 3: always linear coupling at lag 3
+        x[2, t] = -0.4 * x[0, t - 3] + theta[2, t]
 
-        # X1 -> X4, quadratic if nonlinear + AR(1) terms
-        if nonlinear:
-            x[3, t] = (-0.5 * (x[0, t-2] ** 2) +
-                       0.25 * sqrt2 * x[3, t-1] +
-                       0.25 * sqrt2 * x[4, t-1] +
-                       theta[3, t])
-        else:
-            x[3, t] = (-0.5 * x[0, t-2] +
-                       0.25 * sqrt2 * x[3, t-1] +
-                       0.25 * sqrt2 * x[4, t-1] +
-                       theta[3, t])
+        # Channel 4: linear/quadratic driver from channel 1 plus AR(1) interaction with 5
+        driver_4 = x[0, t - 2] ** 2 if nonlinear else x[0, t - 2]
+        x[3, t] = (
+            -0.5 * driver_4
+            + ar1_weight * x[3, t - 1]
+            + ar1_weight * x[4, t - 1]
+            + theta[3, t]
+        )
 
-        # X4 <-> X5: AR(1)
-        x[4, t] = (-0.25 * sqrt2 * x[3, t-1] +
-                    0.25 * sqrt2 * x[4, t-1] +
-                    theta[4, t])
-        
-    x = zscore_normalize(x)
-    return x
+        # Channel 5: AR(1) interaction with channel 4 (bidirectional)
+        x[4, t] = (
+            -ar1_weight * x[3, t - 1]
+            + ar1_weight * x[4, t - 1]
+            + theta[4, t]
+        )
+
+    return _zscore(x)
 
 
+def freq_ar(
+    T: int = 1000,
+    *,
+    fs: float = 256.0,
+    nonlinear: bool = False,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Generate a 5-channel frequency-band-dependent AR model.
 
-def freq_ar(T=1000, fs=256, nonlinear=False):
+    Connectivity is carried selectively in alpha (8–12 Hz) and gamma (25+ Hz)
+    bands: channels 2 and 3 receive gamma-band input from channel 1, channel 4
+    receives alpha-band input from channel 1, and channel 5 receives gamma-band
+    input from channel 4.
+    Ground-truth edges: 1->2 (γ), 1->3 (γ), 1->4 (α), 4->5 (γ).
+
+    Parameters
+    ----------
+    T : int
+        Number of time samples. Default: 1000.
+    fs : float
+        Sampling frequency in Hz. Default: 256.0.
+    nonlinear : bool
+        If True, apply quadratic coupling for 1->2 and 1->4. Default: False.
+    rng : np.random.Generator, optional
+        Random generator for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (5, T), z-score normalized per channel.
     """
-    Simulate one realization of Frequency-Dependent AR model.
-    fs: sampling frequency in Hz (default 256 Hz)
-    """
-    K = 5
-    sqrt2 = np.sqrt(2)
+    rng = _resolve_rng(rng)
+    theta = np.array([generate_pink_noise(T, rng=rng) for _ in range(N_CHANNELS)])
 
-    # Generate pink noise θ1,...,θ5
-    theta = np.array([generate_pink_noise(T) for _ in range(K)])
+    # Bandpass-filter noise to isolate frequency-specific coupling pathways
+    gamma_high = fs / 2 * NYQUIST_SAFETY
+    theta_alpha = np.array([bandpass(sig, ALPHA_LOW, ALPHA_HIGH, fs) for sig in theta])
+    theta_gamma = np.array([bandpass(sig, GAMMA_LOW, gamma_high, fs) for sig in theta])
 
-    # # Bandpass filtered versions for alpha (8–12 Hz) & gamma (25–100 Hz)
-    # theta_alpha = np.array([bandpass(sig, 8, 12, fs) for sig in theta])
-    # theta_gamma = np.array([bandpass(sig, 25, 100, fs) for sig in theta])
-
-    # Use safe band edges:
-    gamma_low, gamma_high = 25, fs/2 * 0.99
-    alpha_low, alpha_high = 8, 12
-
-    theta_alpha = np.array([bandpass(sig, alpha_low, alpha_high, fs) for sig in theta])
-    theta_gamma = np.array([bandpass(sig, gamma_low, gamma_high, fs) for sig in theta])
-
-
-    x = np.zeros((K, T))
+    x = np.zeros((N_CHANNELS, T))
+    # AR(2) coefficients matching pink_ar for channel 1
+    ar1_coeff = AR_RHO * np.sqrt(2)
+    ar1_weight = 0.25 * np.sqrt(2)
 
     for t in range(6, T):
-        # x1: AR(2)
-        x[0, t] = (0.95 * sqrt2 * x[0, t-1] - 0.9025 * x[0, t-2] + theta[0, t])
+        # Channel 1: AR(2) with spectral radius AR_RHO driven by broadband pink noise
+        x[0, t] = ar1_coeff * x[0, t - 1] - AR_STABLE * x[0, t - 2] + theta[0, t]
 
-        # X1γ -> X2: quadratic if nonlinear
-        if nonlinear:
-            x[1, t] = 0.5 * (theta_gamma[0, t-2] ** 2) + theta[1, t]
-        else:
-            x[1, t] = 0.5 * theta_gamma[0, t-2] + theta[1, t]
+        # Channel 2: driven by gamma-band of channel 1 at lag 2
+        gamma_driver_1 = theta_gamma[0, t - 2] ** 2 if nonlinear else theta_gamma[0, t - 2]
+        x[1, t] = 0.5 * gamma_driver_1 + theta[1, t]
 
-        # X1γ, X2γ -> X3
-        x[2, t] = (-0.4 * theta_gamma[0, t-3] +
-                   0.25 * sqrt2 * theta_gamma[1, t-3] +
-                   theta[2, t])
+        # Channel 3: driven by gamma-band of channels 1 and 2 at lag 3
+        x[2, t] = (
+            -0.4 * theta_gamma[0, t - 3]
+            + ar1_weight * theta_gamma[1, t - 3]
+            + theta[2, t]
+        )
 
-        # X1α -> X4: quadratic if nonlinear, plus AR(1) terms
-        if nonlinear:
-            x[3, t] = (-0.5 * (theta_alpha[0, t-5] ** 2) +
-                       0.25 * sqrt2 * x[3, t-1] +
-                       0.25 * sqrt2 * x[4, t-1] +
-                       theta[3, t])
-        else:
-            x[3, t] = (-0.5 * theta_alpha[0, t-5] +
-                       0.25 * sqrt2 * x[3, t-1] +
-                       0.25 * sqrt2 * x[4, t-1] +
-                       theta[3, t])
+        # Channel 4: driven by alpha-band of channel 1 at lag 5, plus AR(1) with channel 5
+        alpha_driver_1 = theta_alpha[0, t - 5] ** 2 if nonlinear else theta_alpha[0, t - 5]
+        x[3, t] = (
+            -0.5 * alpha_driver_1
+            + ar1_weight * x[3, t - 1]
+            + ar1_weight * x[4, t - 1]
+            + theta[3, t]
+        )
 
-        # X4γ -> X5 + AR(1)
-        x[4, t] = (-0.25 * sqrt2 * theta_gamma[3, t-1] +
-                    0.25 * sqrt2 * x[4, t-1] +
-                    theta[4, t])
+        # Channel 5: driven by gamma-band of channel 4 at lag 1, plus AR(1) self
+        x[4, t] = (
+            -ar1_weight * theta_gamma[3, t - 1]
+            + ar1_weight * x[4, t - 1]
+            + theta[4, t]
+        )
 
-    x = zscore_normalize(x)
-    return x
+    return _zscore(x)
 
 
-# =============================
-# 统一入口
-# =============================
-_MODEL_MAP = {
-    'random': random_system,
-    'henon': henon_system,
-    'lorenz': lorenz_system,
-    'sweep': seizure_sweep,
-    'cascadear': cascade_ar,
-    'pinkarlin': lambda T, **kw: pink_ar(T=T, nonlinear=False, **kw),
-    'pinkarnonlin': lambda T, **kw: pink_ar(T=T, nonlinear=True, **kw),
-    'freqarlin': lambda T, **kw: freq_ar(T=T, nonlinear=False, **kw),
-    'freqarnonlin': lambda T, **kw: freq_ar(T=T, nonlinear=True, **kw)
+# ---------------------------------------------------------------------------
+# Model registry and unified entry point
+# ---------------------------------------------------------------------------
+
+_MODEL_REGISTRY: dict[str, Callable[..., np.ndarray]] = {
+    "random": random_system,
+    "henon": henon_system,
+    "lorenz": lorenz_system,
+    "sweep": seizure_sweep,
+    "cascadear": cascade_ar,
+    "pinkarlin": lambda T, **kw: pink_ar(T, nonlinear=False, **kw),
+    "pinkarnonlin": lambda T, **kw: pink_ar(T, nonlinear=True, **kw),
+    "freqarlin": lambda T, **kw: freq_ar(T, nonlinear=False, **kw),
+    "freqarnonlin": lambda T, **kw: freq_ar(T, nonlinear=True, **kw),
 }
 
-# 支持数字索引：按顺序生成同样的列表
-_MODEL_LIST = [
-    _MODEL_MAP['random'],
-    _MODEL_MAP['henon'],
-    _MODEL_MAP['lorenz'],
-    _MODEL_MAP['sweep'],
-    _MODEL_MAP['cascadear'],
-    _MODEL_MAP['pinkarlin'],
-    _MODEL_MAP['pinkarnonlin'],
-    _MODEL_MAP['freqarlin'],
-    _MODEL_MAP['freqarnonlin'],
-]
+VALID_MODELS: list[str] = list(_MODEL_REGISTRY)
 
-# ==== 统一接口 ====
-def simulate(model, T=1000, seed=None,**kwargs):
+
+def simulate(
+    model: str | int,
+    T: int = 1000,
+    *,
+    seed: int | None = None,
+    **kwargs,
+) -> np.ndarray:
+    """Run a named or index-addressed simulation model.
+
+    All randomness is routed through a single ``numpy.random.Generator`` created
+    from ``seed``, so results are fully reproducible without mutating global RNG state.
+
+    Parameters
+    ----------
+    model : str or int
+        Model name (case-insensitive) or integer index 0–8. Valid names:
+        ``random``, ``henon``, ``lorenz``, ``sweep``, ``cascadear``,
+        ``pinkarlin``, ``pinkarnonlin``, ``freqarlin``, ``freqarnonlin``.
+    T : int
+        Number of time samples to generate. Must be a positive integer.
+        Default: 1000.
+    seed : int, optional
+        Random seed for reproducibility. Does not affect global ``numpy`` RNG state.
+    **kwargs
+        Additional keyword arguments forwarded to the chosen model function
+        (e.g. ``c``, ``rho``, ``snr_db``, ``fs``).
+
+    Returns
+    -------
+    np.ndarray
+        Simulated data of shape ``(5, T)``, z-score normalized per channel.
+
+    Raises
+    ------
+    ValueError
+        If ``model`` is an unrecognised name, an out-of-range index, or T <= 0.
+    TypeError
+        If ``model`` is neither a string nor an integer.
+
+    Examples
+    --------
+    >>> x = simulate("random", T=2000, seed=42)
+    >>> x.shape
+    (5, 2000)
+    >>> x = simulate(2, T=500, seed=0)  # lorenz by index
+    >>> x.shape
+    (5, 500)
     """
-    Unified simulator for all models.
-
-    Parameters:
-        model : str or int
-            Model name (case-insensitive) or index (0~8)
-        T : int
-            Time series length
-        **kwargs : model-specific arguments
-
-    Returns:
-        np.ndarray : Simulated data (5, T)
-    """
-
-    if seed is not None:
-        np.random.seed(seed)
+    if not isinstance(T, int) or T <= 0:
+        raise ValueError(f"T must be a positive integer, got {T!r}.")
 
     if isinstance(model, str):
         model_key = model.lower()
-        if model_key not in _MODEL_MAP:
-            raise ValueError(f"Unknown model name: {model}")
-        func = _MODEL_MAP[model_key]
-
+        if model_key not in _MODEL_REGISTRY:
+            raise ValueError(
+                f"Unknown model {model!r}. Valid names: {VALID_MODELS}"
+            )
+        func = _MODEL_REGISTRY[model_key]
     elif isinstance(model, int):
-        if not (0 <= model < len(_MODEL_LIST)):
-            raise ValueError(f"Model index out of range: {model}")
-        func = _MODEL_LIST[model]
-
+        if not (0 <= model < len(_MODEL_KEYS)):
+            raise ValueError(
+                f"Model index {model} out of range [0, {len(_MODEL_KEYS) - 1}]."
+            )
+        func = _MODEL_REGISTRY[_MODEL_KEYS[model]]
     else:
-        raise TypeError(f"Model must be str or int, got {type(model)}")
+        raise TypeError(
+            f"model must be str or int, got {type(model).__name__!r}."
+        )
 
-    return func(T=T, **kwargs)
-
+    # Isolated generator: seeding here does not pollute numpy's global RNG
+    rng = np.random.default_rng(seed)
+    logger.debug("Simulating model=%r T=%d seed=%s", model, T, seed)
+    return func(T, rng=rng, **kwargs)
