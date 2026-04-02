@@ -1,468 +1,394 @@
-""""
-Essential Functions for applying MVARICA process on input signals.
+"""MVARICA pipeline for directed brain connectivity estimation.
+
+Implements Multivariate Vector Autoregressive Independent Component Analysis
+(MVARICA): fits an MVAR model, applies ICA to the residuals, transforms
+coefficients to source space, and computes PDC or DTF in the frequency domain.
+
+References
+----------
+Baccalá & Sameshima (2001). Partial directed coherence. Biol. Cybern., 84, 463–474.
+Kaminski & Blinowska (1991). A new method of information flow description in
+    brain structures. Biol. Cybern., 65, 203–210.
 """
 
+import logging
+
 import numpy as np
-import scipy as sp
-from scipy.fftpack import fft
+import scipy.linalg
+from numpy.fft import fft
+
+logger = logging.getLogger(__name__)
+
+# An MVAR model is stable when all eigenvalues of the companion matrix
+# have modulus strictly less than 1 (ensures stationarity).
+_STABILITY_THRESHOLD: float = 1.0
 
 
 class MVAR:
-    """
-    Multivariate Vector Autoregressive Model implementation.
+    """Multivariate Vector Autoregressive (MVAR) model.
 
-    This class implements methods for fitting, predicting with, and checking stability of
-    MVAR models. MVAR models are useful for analyzing directed interactions between multiple
-    time series by modeling how past values of all series affect current values of each series.
+    Fits, predicts with, and checks the stability of an MVAR model.
+    MVAR models capture how past values of all channels jointly predict the
+    current value of each channel, enabling directed connectivity analysis.
 
     Parameters
     ----------
     model_order : int
-        Order of the MVAR model, indicating how many past time points influence the current value.
-        Higher orders can capture more complex temporal dependencies but require more data to fit.
-
-    fitting_method : str or object, optional
-        Method used for fitting the MVAR model (default='default'). Options:
-        - 'default': Uses least squares method if delta=0, or regularized least squares if delta≠0
-        - custom object: Must implement a fit(x, y) method and a coef attribute
-
-    delta : float, optional
-        Ridge penalty parameter for regularization (default=0):
-        - 0: No regularization (standard least squares)
-        - >0: Adds L2 regularization to stabilize parameter estimation
+        Number of past time lags included in the model.
+    fitting_method : str or object
+        ``"default"`` uses least-squares (or ridge regression when delta > 0).
+        A custom object must implement ``fit(x, y)`` and expose a ``coef``
+        attribute.
+    delta : float
+        Ridge penalty for regularization. ``0`` means no regularization.
 
     Attributes
     ----------
     order : int
-        The order of the MVAR model
-
-    coeff : ndarray
-        The estimated MVAR coefficients with shape (n_channels, n_channels * model_order)
-
-    residuals : ndarray
-        The residuals after fitting the model, with same shape as input signal
-
-    Methods
-    -------
-    fit(signal)
-        Fits the MVAR model to the input signal
-
-    predict(signal)
-        Predicts values using the fitted MVAR model
-
-    stability()
-        Checks whether the MVAR model is stable
-
-    copy()
-        Creates a copy of the MVAR model instance
-
-    Notes
-    -----
-    Stability of an MVAR model is crucial for interpretability. An unstable model
-    implies that the system would diverge over time, which is typically not
-    physiologically plausible for brain activity.
-
-    The fitting process constructs a system of equations based on the input signal
-    and the specified model order, then solves for the coefficients.
+        Model order (number of lags).
+    coeff : np.ndarray
+        Estimated coefficients, shape (n_channels, n_channels * order).
+    residuals : np.ndarray
+        Model residuals, same shape as the input signal.
 
     Examples
     --------
-    >>> import numpy as np
-    >>> # Create simulated data: 3 channels, 2 epochs, 1000 time points each
-    >>> data = np.random.randn(2, 3, 1000)
-    >>> # Initialize MVAR model with order 5
+    >>> data = np.random.randn(2, 3, 1000)   # 2 epochs, 3 channels, 1000 samples
     >>> model = MVAR(model_order=5, delta=0.1)
-    >>> # Fit the model
     >>> model.fit(data)
-    >>> # Check stability
-    >>> is_stable = model.stability()
-    >>> print(f"Model is stable: {is_stable}")
-    >>> # Generate predictions
-    >>> predicted = model.predict(data)
+    >>> model.stability()
+    True
     """
 
-    def __init__(self, model_order, fitting_method='default', delta=0):
-        """
-        Initialize an MVAR model with specified parameters.
-
-        Parameters
-        ----------
-        model_order : int
-            Order of the MVAR model
-
-        fitting_method : str or object, optional
-            Method for fitting the MVAR model (default='default')
-
-        delta : float, optional
-            Ridge penalty parameter (default=0)
-        """
-
+    def __init__(
+        self,
+        model_order: int,
+        fitting_method: str | object = "default",
+        delta: float = 0,
+    ) -> None:
         self.order = model_order
         self.fit_method = fitting_method
         self.fitting = None
-        self.coeff = np.asarray([])
-        self.residuals = np.asarray([])
+        self.coeff: np.ndarray = np.asarray([])
+        self.residuals: np.ndarray = np.asarray([])
         self.delta = delta
 
-    def copy(self):
-        """
-        Create a deep copy of the current MVAR model.
+    def copy(self) -> "MVAR":
+        """Return a deep copy of this model instance.
 
         Returns
         -------
-        mvar_copy : MVAR
-            A new MVAR instance with the same parameters and coefficients
+        MVAR
+            New instance with the same order, coefficients, and residuals.
         """
-
         mvar_copy = self.__class__(self.order)
         mvar_copy.coeff = self.coeff.copy()
         mvar_copy.residuals = self.residuals.copy()
         return mvar_copy
 
-    def predict(self, signal):
-        """
-        Predict time series data using the fitted MVAR model.
+    def predict(self, signal: np.ndarray) -> np.ndarray:
+        """Predict time series values using the fitted MVAR coefficients.
 
-        This method applies the fitted MVAR coefficients to predict values
-        based on previous time points in the signal.
+        Predictions start from the (model_order)-th time point because earlier
+        points have insufficient history.
 
         Parameters
         ----------
-        signal : ndarray
-            Input signal with shape (n_epochs, n_channels, n_samples)
+        signal : np.ndarray
+            Input signal, shape (n_epochs, n_channels, n_samples).
 
         Returns
         -------
-        predicted : ndarray
-            Predicted signal with the same shape as input
-
-        Notes
-        -----
-        Predictions start from the (model_order)th time point, as earlier
-        points don't have sufficient history for prediction.
+        np.ndarray
+            Predicted signal, same shape as input.
         """
+        n_epochs, n_channels, n_samples = signal.shape
+        p = self.coeff.shape[1] // n_channels
+        predicted = np.zeros_like(signal)
 
-        epoch, channel, sample = signal.shape
-        coeff_shape = self.coeff.shape
-        p = int(coeff_shape[1] / channel)
-        predicted = np.zeros(signal.shape)
-        if epoch > sample - channel:
-            for i in range(1, p + 1):
-                bp = self.coeff[:, (i - 1)::p]
-                for j in range(p, sample):
-                    predicted[:, :, j] += np.dot(signal[:, :, j - i], bp.T)
+        if n_epochs > n_samples - n_channels:
+            for lag in range(1, p + 1):
+                lag_coeff = self.coeff[:, (lag - 1)::p]
+                for t in range(p, n_samples):
+                    predicted[:, :, t] += np.dot(signal[:, :, t - lag], lag_coeff.T)
         else:
-            for i in range(1, p + 1):
-                bp = self.coeff[:, (i - 1)::p]
-                for j in range(epoch):
-                    predicted[j, :, p:] += np.dot(bp, signal[j, :, (p - i):(sample - i)])
+            for lag in range(1, p + 1):
+                lag_coeff = self.coeff[:, (lag - 1)::p]
+                for epoch in range(n_epochs):
+                    predicted[epoch, :, p:] += np.dot(
+                        lag_coeff, signal[epoch, :, (p - lag) : (n_samples - lag)]
+                    )
         return predicted
 
-    def stability(self):
-        """
-        Check the stability of the fitted MVAR model.
+    def stability(self) -> bool:
+        """Check that all eigenvalues of the companion matrix have modulus < 1.
 
-        An MVAR model is stable if all eigenvalues of the coefficient matrix
-        have modulus less than 1. Stability ensures that the model represents
-        a stationary process.
+        Stability is required for the MVAR to represent a stationary process.
+        Unstable models produce physiologically implausible, diverging signals.
 
         Returns
         -------
-        is_stable : bool
-            True if the model is stable, False otherwise
-
-        Notes
-        -----
-        Stability is a necessary condition for valid connectivity analysis.
-        Unstable models can produce misleading connectivity estimates.
+        bool
+            ``True`` if the model is stable.
         """
+        n_channels, n_coeff = self.coeff.shape
+        p = n_coeff // n_channels
+        assert n_coeff == n_channels * p, "Coefficient matrix shape is inconsistent."
 
-        co_0, co_1 = self.coeff.shape
-        p = co_1 // co_0
-        assert (co_1 == co_0 * p)
-        top_block = []
-        for i in range(p):
-            top_block.append(self.coeff[:, i::p])
-        top_block = np.hstack(top_block)
-        im = np.eye(co_0)
-        eye_block = im
-        for i in range(p - 2):
-            eye_block = sp.linalg.block_diag(im, eye_block)
-        eye_block = np.hstack([eye_block, np.zeros((co_0 * (p - 1), co_0))])
-        tmp = np.vstack([top_block, eye_block])
-        check_stability = np.all(np.abs(np.linalg.eig(tmp)[0]) < 1)
-        return check_stability
+        # Build the companion matrix: top block = AR coefficients, lower = identity shift
+        top_block = np.hstack([self.coeff[:, i::p] for i in range(p)])
+        identity_block = np.eye(n_channels * (p - 1))
+        zero_pad = np.zeros((n_channels * (p - 1), n_channels))
+        companion = np.vstack([top_block, np.hstack([identity_block, zero_pad])])
 
-    def construct_equation(self, signal, delta_1=None):
-        """
-        Construct the system of equations for MVAR model fitting.
+        eigenvalues = np.linalg.eigvals(companion)
+        return bool(np.all(np.abs(eigenvalues) < _STABILITY_THRESHOLD))
 
-        This method reorganizes the input signal into a form suitable for
-        least squares estimation of MVAR coefficients.
+    def construct_equation(
+        self,
+        signal: np.ndarray,
+        delta_1: float | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Build the design matrix X and target matrix Y for least-squares fitting.
+
+        Rearranges lagged signal values into a regression design. When
+        ``delta_1`` is provided, ridge-regularization rows are appended.
 
         Parameters
         ----------
-        signal : ndarray
-            Input signal with shape (n_epochs, n_channels, n_samples)
-
-        delta_1 : float or None, optional
-            Ridge penalty parameter for regularization
+        signal : np.ndarray
+            Input signal, shape (n_epochs, n_channels, n_samples).
+        delta_1 : float or None
+            Ridge penalty to append as regularization rows.
 
         Returns
         -------
-        x : ndarray
-            Design matrix containing lagged versions of the signal
-
-        y : ndarray
-            Target matrix containing the values to be predicted
-
-        Notes
-        -----
-        If delta_1 is provided, regularization terms are added to the design matrix
-        and target matrix to implement ridge regression.
+        x : np.ndarray
+            Design matrix, shape (n_obs [+ n_reg], n_channels * order).
+        y : np.ndarray
+            Target matrix, shape (n_obs [+ n_reg], n_channels).
         """
+        p = self.order
+        n_epochs, n_channels, n_samples = signal.shape
+        n_obs = (n_samples - p) * n_epochs
+        n_rows = n_obs if delta_1 is None else n_obs + n_channels * p
 
-        mvar_order = self.order
-        epoch, channel, sample = signal.shape
-        n = (sample - mvar_order) * epoch
-        rows = n if delta_1 is None else n + channel * mvar_order
-        x = np.zeros((rows, channel * mvar_order))
-        for i in range(channel):
-            for j in range(1, mvar_order + 1):
-                x[:n, i * mvar_order + j - 1] = np.reshape(signal[:, i, mvar_order - j:-j].T, n)
+        x = np.zeros((n_rows, n_channels * p))
+        for ch in range(n_channels):
+            for lag in range(1, p + 1):
+                x[:n_obs, ch * p + lag - 1] = np.reshape(
+                    signal[:, ch, p - lag : -lag].T, n_obs
+                )
         if delta_1 is not None:
-            np.fill_diagonal(x[n:, :], delta_1)
-        y = np.zeros((rows, channel))
-        for z in range(channel):
-            y[:n, z] = np.reshape(signal[:, z, mvar_order:].T, n)
+            np.fill_diagonal(x[n_obs:, :], delta_1)
+
+        y = np.zeros((n_rows, n_channels))
+        for ch in range(n_channels):
+            y[:n_obs, ch] = np.reshape(signal[:, ch, p:].T, n_obs)
+
         return x, y
 
-    def fit(self, signal):
-        """
-        Fit the MVAR model to input signal data.
+    def fit(self, signal: np.ndarray) -> "MVAR":
+        """Estimate MVAR coefficients from the input signal.
 
-        This method estimates the MVAR coefficients that best predict the
-        signal values based on their past values.
+        Uses ordinary least squares when ``delta == 0``, ridge regression
+        when ``delta > 0``, or a custom sklearn-compatible estimator when
+        ``fitting_method`` is an object.
 
         Parameters
         ----------
-        signal : ndarray
-            Input signal with shape (n_epochs, n_channels, n_samples)
+        signal : np.ndarray
+            Input signal, shape (n_epochs, n_channels, n_samples).
 
         Returns
         -------
-        self : MVAR
-            The fitted MVAR model instance
-
-        Notes
-        -----
-        The fitting method depends on the 'fitting_method' parameter:
-        - If 'default' and delta=0: Standard least squares
-        - If 'default' and delta≠0: Regularized least squares
-        - If custom object: Uses the object's fit method
-
-        After fitting, the model coefficients and residuals are stored as attributes.
+        MVAR
+            This instance (for method chaining).
         """
+        is_default = isinstance(self.fit_method, str) and self.fit_method.lower() == "default"
 
-        if self.fit_method.lower() == 'default':
+        if is_default:
             if self.delta == 0 or self.delta is None:
                 x, y = self.construct_equation(signal)
             else:
-                # x, y = self.construct_equation(signal, self.order, self.delta)
                 x, y = self.construct_equation(signal, self.delta)
-            coeff, res, rank, s = sp.linalg.lstsq(x, y)
-
-            self.coeff = coeff.transpose()
-            self.residuals = signal - self.predict(signal)
-
-            return self
-
+            coeff, _residuals, _rank, _sv = scipy.linalg.lstsq(x, y)
+            self.coeff = coeff.T
         else:
             x, y = self.construct_equation(signal)
             self.fitting = self.fit_method.fit(x, y)
             self.coeff = self.fitting.coef
-            self.residuals = signal - self.predict(signal)
 
-            return self
+        self.residuals = signal - self.predict(signal)
+        return self
 
 
-def ica_wrapper(ica_input, ica_method='infomax_extended', random_state=None):
-    """
-    Performs Independent Component Analysis (ICA) on input data.
+def ica_wrapper(
+    ica_input: np.ndarray,
+    ica_method: str = "infomax_extended",
+    random_state: int | None = None,
+) -> np.ndarray:
+    """Apply ICA to the input data and return the unmixing matrix.
 
-    This function serves as a unified interface to different ICA algorithms
-    implemented in external packages like MNE and scikit-learn.
+    Serves as a unified interface to Extended Infomax (MNE), standard Infomax
+    (MNE), and FastICA (scikit-learn).
 
     Parameters
     ----------
-    ica_input : ndarray
-        Input data matrix with shape (n_samples, n_features)
-
-    ica_method : str, optional
-        ICA algorithm to use (default='infomax_extended'). Options:
-        - 'infomax_extended': Extended Infomax algorithm from MNE
-        - 'infomax': Standard Infomax algorithm from MNE
-        - 'fastica': FastICA algorithm from scikit-learn
-
-    random_state : int or None, optional
-        Seed for random number generator (default=None):
-        - None: Use default random state
-        - int: Set specific random seed for reproducibility
+    ica_input : np.ndarray
+        Shape (n_samples, n_features). Observations in rows, variables in columns.
+    ica_method : str
+        ICA algorithm. One of ``"infomax_extended"``, ``"infomax"``,
+        ``"fastica"``.
+    random_state : int or None
+        Seed for the ICA random initialisation.
 
     Returns
     -------
-    unmixing_matrix : ndarray
-        Unmixing matrix with shape (n_features, n_features) that transforms
-        the input data into independent components
-
-    Notes
-    -----
-    The different ICA methods have varying properties:
-    - Extended Infomax can separate both super- and sub-Gaussian sources
-    - Standard Infomax works best for super-Gaussian sources
-    - FastICA is generally faster but may be less stable for certain data types
+    np.ndarray
+        Unmixing matrix, shape (n_features, n_features).
 
     Raises
     ------
     ValueError
-        If an unsupported ICA method is specified
-
-    Examples
-    --------
-    >>> # Apply Extended Infomax ICA to random data
-    >>> data = np.random.randn(1000, 10)  # 1000 samples, 10 features
-    >>> unmixing = ica_wrapper(data, ica_method='infomax_extended', random_state=42)
-    >>> # Transform data to independent components
-    >>> components = data @ unmixing.T
+        If ``ica_method`` is not one of the supported options.
     """
-
-    if ica_method.lower() == 'infomax_extended':
+    method_lower = ica_method.lower()
+    if method_lower in ("infomax_extended", "infomax"):
         from mne.preprocessing.infomax_ import infomax
-        return infomax(ica_input, extended=True, random_state=random_state)
-    elif ica_method.lower() == 'infomax':
-        from mne.preprocessing.infomax_ import infomax
-        return infomax(ica_input, extended=False, random_state=random_state)
-    elif ica_method.lower() == 'fastica':
+        return infomax(
+            ica_input,
+            extended=(method_lower == "infomax_extended"),
+            random_state=random_state,
+        )
+    if method_lower == "fastica":
         from sklearn.decomposition import FastICA
-        aux = FastICA(random_state=random_state)
-        aux.fit(ica_input)
-        return aux.components_
-    else:
-        raise ValueError(
-            'This method is not defined!' + '\n' + 'supported methods: infomax, fastica, picard, infomax_extended')
+        estimator = FastICA(random_state=random_state)
+        estimator.fit(ica_input)
+        return estimator.components_
+
+    raise ValueError(
+        f"Unsupported ICA method {ica_method!r}. "
+        "Valid options: 'infomax_extended', 'infomax', 'fastica'."
+    )
 
 
-def connectivity_mvarica(real_signal, ica_params, measure_name, n_fft=512, var_model=MVAR):
-    """
-    Applies MVARICA approach to estimate connectivity between brain sources.
+def connectivity_mvarica(
+    real_signal: np.ndarray,
+    ica_params: dict,
+    measure_name: str,
+    n_fft: int = 512,
+    var_model: MVAR = MVAR,
+) -> np.ndarray:
+    """Estimate directed connectivity using the MVARICA pipeline.
 
-    MVARICA (Multivariate Autoregressive Independent Component Analysis) combines
-    MVAR modeling with ICA to jointly estimate source activities and their causal
-    interactions. This function implements the full pipeline from signal to
-    connectivity measures.
+    Steps
+    -----
+    1. Fit an MVAR model to the input signals.
+    2. Extract residuals (model innovations).
+    3. Apply ICA to the residuals to estimate the source unmixing matrix.
+    4. Transform MVAR coefficients to the ICA source space.
+    5. Compute PDC or DTF from the spectral representation.
 
     Parameters
     ----------
-    real_signal : ndarray
-        Input signal with shape (n_epochs, n_channels, n_samples)
-
+    real_signal : np.ndarray
+        Input data, shape (n_epochs, n_channels, n_samples).
     ica_params : dict
-        Dictionary of ICA parameters with keys:
-        - 'method': str, ICA algorithm to use (see ica_wrapper for options)
-        - 'random_state': int or None, random seed for reproducibility
-
+        ICA settings with keys ``"method"`` (str) and ``"random_state"`` (int | None).
     measure_name : str
-        Connectivity measure to compute. Options:
-        - 'mvar_spectral': Spectral representation of VAR coefficients
-        - 'mvar_tf': Transfer function
-        - 'pdc': Partial directed coherence
-        - 'dtf': Directed transfer function
-
-    n_fft : int, optional
-        Number of frequency bins for connectivity computation (default=512)
-
-    var_model : MVAR, optional
-        Pre-initialized MVAR model instance (default=MVAR)
+        Connectivity measure to return. One of ``"mvar_spectral"``,
+        ``"mvar_tf"``, ``"pdc"``, ``"dtf"``.
+    n_fft : int
+        Number of frequency bins. Default: 512.
+    var_model : MVAR
+        Pre-initialised (but unfitted) MVAR model instance.
 
     Returns
     -------
-    result : ndarray
-        Connectivity measure matrix with shape dependent on the measure:
-        - For all measures: (n_channels, n_channels, n_fft)
-        Where each [i, j] entry represents connectivity from channel j to channel i
+    np.ndarray
+        Connectivity matrix, shape (n_channels, n_channels, n_fft).
+        Entry ``[i, j, f]`` represents connectivity from channel j to channel i
+        at frequency bin f.
 
     Notes
     -----
-    Process steps:
-    1. Fit an MVAR model to the input signals
-    2. Extract residuals (innovations) from the fitted model
-    3. Apply ICA to the residuals to estimate the mixing matrix
-    4. Transform the MVAR coefficients to the source space
-    5. Compute the specified connectivity measure in the frequency domain
-
-    The different connectivity measures have different interpretations:
-    - PDC (Partial Directed Coherence): Measures direct influence from j to i
-      normalized by the total outflow from j
-    - DTF (Directed Transfer Function): Measures total influence from j to i
-      normalized by the total inflow to i
-
-    References
-    ----------
-    Baccalá, L. A., & Sameshima, K. (2001). Partial directed coherence: a new
-    concept in neural structure determination. Biological cybernetics, 84(6), 463-474.
-
-    Kaminski, M., & Blinowska, K. J. (1991). A new method of the description of
-    the information flow in the brain structures. Biological cybernetics, 65(3), 203-210.
-
-    Examples
-    --------
-    >>> # Estimate PDC connectivity from simulated data
-    >>> data = np.random.randn(2, 5, 1000)  # 2 epochs, 5 channels, 1000 samples
-    >>> mvar_model = MVAR(model_order=5, delta=0.1)
-    >>> ica_params = {'method': 'infomax_extended', 'random_state': 42}
-    >>> pdc = connectivity_mvarica(data, ica_params, 'pdc', n_fft=128, var_model=mvar_model)
+    The transfer function is computed via:
+        A(f) = FFT([I, -A_1, -A_2, ..., -A_p])
+        H(f) = A(f)^{-1}
+    where A_k are the MVAR coefficient matrices in source space.
     """
+    fitted_model = var_model.fit(real_signal)
+    residuals = real_signal - var_model.predict(real_signal)
 
-    fit_var = var_model.fit(real_signal)
-    res = real_signal - var_model.predict(real_signal)
+    # Concatenate epochs along time axis for ICA
+    residuals_cat = np.concatenate(
+        np.split(residuals, residuals.shape[0], axis=0), axis=2
+    ).squeeze(0)
+    unmixing_matrix = ica_wrapper(
+        residuals_cat.T,
+        ica_method=ica_params["method"],
+        random_state=ica_params["random_state"],
+    ).T
+    mixing_matrix = scipy.linalg.pinv(unmixing_matrix)
 
-    unmix_matrix = ica_wrapper(np.concatenate(np.split(res, res.shape[0], 0), axis=2).squeeze(0).T,
-                               ica_method=ica_params["method"], random_state=ica_params["random_state"]).T
-    mix_matrix = sp.linalg.pinv(unmix_matrix)
-    trns_unmix_matrix = unmix_matrix.T
-    e = np.concatenate([trns_unmix_matrix.dot(res[i, ...])[np.newaxis, ...] for i in range(res.shape[0])])
+    # Project residuals into source space
+    source_residuals = np.concatenate([
+        (unmixing_matrix.T @ residuals[epoch])[np.newaxis]
+        for epoch in range(residuals.shape[0])
+    ])
 
-    fit_var_b = fit_var.copy()
-    for k in range(0, fit_var.order):
-        fit_var_b.coeff[:, k::fit_var.order] = mix_matrix.dot(fit_var.coeff[:, k::fit_var.order].transpose()).dot(
-            unmix_matrix).transpose()
+    # Transform MVAR coefficients to source space
+    source_model = fitted_model.copy()
+    for lag in range(fitted_model.order):
+        source_model.coeff[:, lag :: fitted_model.order] = (
+            mixing_matrix
+            @ fitted_model.coeff[:, lag :: fitted_model.order].T
+            @ unmixing_matrix
+        ).T
 
-    noise_cov = np.cov(np.concatenate(np.split(e, e.shape[0], 0), axis=2).squeeze(0).T, rowvar=False)
+    noise_cov = np.cov(
+        np.concatenate(
+            np.split(source_residuals, source_residuals.shape[0], axis=0), axis=2
+        ).squeeze(0).T,
+        rowvar=False,
+    )
 
-    coeffs = fit_var_b.coeff
-    coeffs = np.asarray(coeffs)
-    coshape_0, coshape_1 = coeffs.shape
-    p = coshape_1 // coshape_0
-    assert (coshape_1 == coshape_0 * p)
+    # Reshape coefficients to (n_channels, n_channels, model_order) for FFT
+    coeffs = np.asarray(source_model.coeff)
+    n_channels = coeffs.shape[0]
+    model_order = coeffs.shape[1] // n_channels
+    coeffs_reshaped = np.reshape(coeffs, (n_channels, n_channels, model_order), order="F")
 
-    re_coeffs = np.reshape(coeffs, (coshape_0, coshape_0, p), 'c')
-    a = fft(np.dstack([np.eye(coshape_0), -re_coeffs]), n_fft * 2 - 1)[:, :, :n_fft]
-    h = np.array([sp.linalg.solve(a, np.eye(a.shape[0])) for a in a.T]).T
+    # Spectral representation: FFT of [I, -A_1, ..., -A_p] over (2*n_fft-1) points,
+    # then keep only the first n_fft bins (causal / positive-frequency part).
+    spectral_a = fft(
+        np.dstack([np.eye(n_channels), -coeffs_reshaped]),
+        n_fft * 2 - 1,
+    )[:, :, :n_fft]
 
-    if measure_name.lower() == 'mvar_spectral':
-        result = a
-    elif measure_name.lower() == 'mvar_tf':
-        result = h
-    elif measure_name.lower() == 'pdc':
-        result = np.abs(a / np.sqrt(np.sum(a.conj() * a, axis=0, keepdims=True)))
-    elif measure_name.lower() == 'dtf':
-        result = np.abs(h / np.sqrt(np.sum(h * h.conj(), axis=1, keepdims=True)))
+    # Transfer function H = A^{-1} computed per frequency bin
+    transfer_h = np.array([
+        np.linalg.solve(a_f, np.eye(n_channels)) for a_f in spectral_a.T
+    ]).T
 
-    return result
+    name = measure_name.lower()
+    if name == "mvar_spectral":
+        return spectral_a
+    if name == "mvar_tf":
+        return transfer_h
+    if name == "pdc":
+        # PDC: normalised by total outflow from each source
+        return np.abs(
+            spectral_a / np.sqrt(np.sum(spectral_a.conj() * spectral_a, axis=0, keepdims=True))
+        )
+    if name == "dtf":
+        # DTF: normalised by total inflow to each target
+        return np.abs(
+            transfer_h / np.sqrt(np.sum(transfer_h * transfer_h.conj(), axis=1, keepdims=True))
+        )
 
-
-
-
-
-
-
+    raise ValueError(
+        f"Unknown measure {measure_name!r}. "
+        "Valid options: 'mvar_spectral', 'mvar_tf', 'pdc', 'dtf'."
+    )
