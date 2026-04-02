@@ -1,11 +1,30 @@
 # config.yml — Snakemake workflow configuration
+# ─────────────────────────────────────────────────────────────────────────────
 # Edit these values to change the pipeline behaviour.
+# All parameters are validated at runtime by the respective scripts.
 
 # ── Simulation parameters ─────────────────────────────────────────────────────
-n_subjects: 25          # subjects in the benchmark  (25 = full run)
-n_epochs:   5           # epochs per subject × model
-t:          1000        # time points per epoch
-fs:         256         # sampling frequency (Hz)
+
+# Number of subjects in the benchmark dataset.
+# Full run: 25. Quick smoke-test: 3.
+n_subjects: 25
+
+# Number of independent epochs (time segments) generated per subject per model.
+n_epochs: 5
+
+# Time points per epoch (samples). Higher values improve FC estimation accuracy
+# but increase computation time proportionally.
+t: 1000
+
+# Sampling frequency in Hz. Must match the frequency ranges used in FC methods
+# (e.g. alpha band 8–12 Hz, gamma band 25+ Hz).
+fs: 256
+
+# Simulation models to include. Valid names (case-insensitive):
+#   random, henon, lorenz, sweep, cascadear,
+#   pinkarlin, pinkarnonlin, freqarlin, freqarnonlin
+# Note: pinkarlin and pinkarnonlin are excluded from the default benchmark
+# because their ground-truth structure overlaps with freqarlin/freqarnonlin.
 models:
   - random
   - henon
@@ -16,16 +35,32 @@ models:
   - freqarnonlin
 
 # ── FC benchmark parameters ───────────────────────────────────────────────────
-percentile:  75         # binarisation threshold (top-N% of off-diagonal values)
+
+# Binarisation threshold: top-N% of off-diagonal absolute values are set to 1.
+# Range: (0, 100). Typical values: 75 (conservative) to 90 (strict).
+percentile: 75
+
+# FC methods to run in the Snakemake benchmark. Valid names:
+#   ADTF, PDC, DTF, cGC, PLI, PSI
+# TE and MI (Transfer Entropy, Mutual Information) are implemented in
+# src/methods/fc_pipeline.py but require IDTxl and are excluded here
+# because they are computationally expensive for large benchmarks.
 methods:
   - ADTF
-  - PDCoh
+  - PDC
   - DTF
   - cGC
   - PLI
   - PSI
 
 # ── BIDS conversion parameters ────────────────────────────────────────────────
-bids_n_subjects: 5      # subjects written to data/bids/
-bids_model:   "random"  # simulation model used for BIDS subjects
-bids_seed:    42        # base random seed
+
+# Number of subjects written to data/bids/ (subset of the full benchmark).
+bids_n_subjects: 5
+
+# Simulation model used to generate the BIDS subjects.
+bids_model: "random"
+
+# Base random seed for BIDS subject generation. Each subject i uses seed
+# (bids_seed + i) to ensure independent, reproducible signals.
+bids_seed: 42
