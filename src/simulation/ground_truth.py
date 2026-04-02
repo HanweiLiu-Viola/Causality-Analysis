@@ -70,6 +70,22 @@ GROUND_TRUTH: dict[str, np.ndarray] = {
         [0, 0, 0, 0, 0],
         [0, 0, 0, 1, 0],
     ]),
+    # Pink-noise AR (linear): 1->2, 1->3, 1->4, 5->4
+    "pinkarlin": np.array([
+        [0, 1, 1, 1, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0],
+    ]),
+    # Pink-noise AR (nonlinear): same structure as pinkarlin
+    "pinkarnonlin": np.array([
+        [0, 1, 1, 1, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0],
+    ]),
 }
 
 VALID_MODELS: list[str] = list(GROUND_TRUTH)

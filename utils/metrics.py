@@ -63,3 +63,30 @@ def binarize_matrix(
     off_diag_mask = ~np.eye(mat.shape[0], dtype=bool)
     threshold = np.percentile(np.abs(mat[off_diag_mask]), percentile)
     return (np.abs(mat) >= threshold).astype(int)
+
+
+def binarize_matrix_raw(
+    matrix: np.ndarray,
+    method: str,
+    *,
+    percentile: float = 75.0,
+) -> np.ndarray:
+    """Thin wrapper around ``binarize_matrix`` for callers that hold a raw array.
+
+    Use this when you have the connectivity matrix directly (not a result dict).
+
+    Parameters
+    ----------
+    matrix : np.ndarray
+        Raw connectivity matrix, shape (n_channels, n_channels).
+    method : str
+        Method name (determines transpose behaviour; see ``binarize_matrix``).
+    percentile : float
+        Threshold percentile. Default: 75.0.
+
+    Returns
+    -------
+    np.ndarray
+        Binary adjacency matrix, shape (n_channels, n_channels).
+    """
+    return binarize_matrix({"matrix": matrix}, method, percentile=percentile)
