@@ -1,5 +1,6 @@
 frites==0.4.4
-idtxl==1.6
+# IDTxl is not on PyPI — install via: pip install Cython && pip install git+https://github.com/pwollstadt/IDTxl.git@v1.6.0
+# idtxl==1.6
 matplotlib==3.10.8
 mne==1.11.0
 mne_bids==0.18.0

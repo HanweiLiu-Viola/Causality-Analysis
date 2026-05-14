@@ -2,6 +2,15 @@
 # scikit-learn, statsmodels, numba, xarray, h5py, networkx, and Jupyter.
 FROM quay.io/jupyter/scipy-notebook:python-3.12
 
+# IDTxl routes all estimators through JIDT (Java Information Dynamics Toolkit)
+# via JPype, so a headless JRE is required at runtime even for the Gaussian estimator.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-21-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+USER ${NB_UID}
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+
 # Install project-specific Python packages not bundled in the base image
 RUN pip install --no-cache-dir \
     numpy==1.26.4 \
@@ -15,6 +24,12 @@ RUN pip install --no-cache-dir \
     beautifulsoup4==4.14.3 \
     pooch==1.9.0 \
     tqdm==4.67.3
+
+# IDTxl is not on PyPI; install from GitHub tag v1.6.0.
+# Cython must be pre-installed because IDTxl's setup.py omits it from build deps.
+RUN pip install --no-cache-dir Cython && \
+    pip install --no-cache-dir \
+        "idtxl @ git+https://github.com/pwollstadt/IDTxl.git@v1.6.0"
 
 # Copy project source into the default notebook directory
 COPY --chown=${NB_UID}:${NB_GID} src/ /home/${NB_USER}/work/src/
