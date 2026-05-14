@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir \
     beautifulsoup4==4.14.3 \
     pooch==1.9.0 \
     tqdm==4.67.3 \
-    pybv==0.7.7
+    pybv==0.7.6
 
 # IDTxl is not on PyPI; install from GitHub tag v1.6.0.
 # Cython must be pre-installed because IDTxl's setup.py omits it from build deps.
