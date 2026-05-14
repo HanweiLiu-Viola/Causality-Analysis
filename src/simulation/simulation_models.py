@@ -663,6 +663,7 @@ _MODEL_REGISTRY: dict[str, Callable[..., np.ndarray]] = {
 }
 
 VALID_MODELS: list[str] = list(_MODEL_REGISTRY)
+_MODEL_MAP = _MODEL_REGISTRY  # backward-compatible alias
 
 
 def simulate(
