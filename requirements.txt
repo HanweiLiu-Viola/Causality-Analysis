@@ -4,7 +4,7 @@ frites==0.4.4
 matplotlib==3.10.8
 mne==1.11.0
 mne_bids==0.18.0
-pybv==0.7.7
+pybv==0.7.6
 mne_connectivity==0.7.0
 numpy==2.4.3
 scikit_learn==1.8.0
