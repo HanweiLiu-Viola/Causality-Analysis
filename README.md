@@ -2,7 +2,25 @@
 
 **Author:** Hanwei Liu
 **Institution:** University Hospital Würzburg (UKW)
-**Last Updated:** 2026-03-23
+**Last Updated:** 2026-05-14
+
+---
+
+## Docker
+
+A pre-built image is available on DockerHub:
+
+```bash
+docker pull viola1003/causality-analysis:latest
+```
+
+Run with Jupyter on port 8888:
+
+```bash
+docker run -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:latest
+```
+
+Then open the URL printed in the terminal.
 
 ---
 ## 1. Project Overview
@@ -89,7 +107,7 @@ FCMethods                 — unified interface; calls _<method>_func per method
 | Method | Function | Internal Convention | Description |
 |---|---|---|---|
 | `ADTF` | `_adtf_func` | `[target, source]` | Adaptive DTF via VAR; integrated over frequency band |
-| `PDCoh` | `_pdcoh_func` | `[target, source]` | Partial Directed Coherence via MVARICA |
+| `PDC` | `_pdc_func` | `[target, source]` | Partial Directed Coherence via MVARICA |
 | `DTF` | `_dtf_func` | `[target, source]` | Directed Transfer Function via MVARICA |
 | `cGC` | `_cgc_func` | `[target, source]` | Conditional Granger Causality via VAR residuals |
 | `PLI` | `_pli_func` | `[target, source]` (symmetric) | Phase Lag Index via MNE; symmetrized |
@@ -111,9 +129,9 @@ FCMethods                 — unified interface; calls _<method>_func per method
    - Data shape: `(25, 7, 5, 5, 1000)`, saved as `.npz`
 
 2. **FC Computation**
-   - Methods: ADTF, PDCoh, DTF, cGC, PLI, PSI
+   - Methods: ADTF, PDC, DTF, cGC, PLI, PSI
    - ADTF: alpha band 8–12 Hz, `maxlags=10`, mean over band (not trapz integral)
-   - PDCoh/DTF: MVARICA with Extended Infomax ICA, `model_order=5`, `n_fft=128`
+   - PDC/DTF: MVARICA with Extended Infomax ICA, `model_order=5`, `n_fft=128`
    - Quick sanity check on Subject 0 / Model 0 with visualization
 
 3. **MCC Evaluation**
@@ -127,7 +145,7 @@ FCMethods                 — unified interface; calls _<method>_func per method
 ```python
 METHODS_PARAMS = {
     "ADTF":  {"fmin": 8, "fmax": 12, "n_freqs": 100, "maxlags": 10, "integrate": True},
-    "PDCoh": {"model_order": 5, "n_fft": 128, "ica_method": "infomax_extended", "integrate": True},
+    "PDC": {"model_order": 5, "n_fft": 128, "ica_method": "infomax_extended", "integrate": True},
     "DTF":   {"model_order": 5, "n_fft": 128, "ica_method": "infomax_extended", "integrate": True},
     "cGC":   {},
     "PLI":   {"fmin": 8, "fmax": 12, "integrate": True},
