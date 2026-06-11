@@ -19,7 +19,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 configfile: "config.yml"
-container: "docker://viola1003/causality-analysis:v1.0.0"
+container: "docker://viola1003/causality-analysis:v1.1.0"
 
 # ── Derived constants ─────────────────────────────────────────────────────────
 _PY = "python"

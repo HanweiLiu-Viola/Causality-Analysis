@@ -24,19 +24,19 @@ cd Causality-Analysis
 Pull the pinned Docker image:
 
 ```bash
-docker pull viola1003/causality-analysis:v1.0.0
+docker pull viola1003/causality-analysis:v1.1.0
 ```
 
 Start JupyterLab from the container:
 
 ```bash
-docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.1.0
 ```
 
 On Windows PowerShell, use `${PWD}` for the volume mount:
 
 ```powershell
-docker run --rm -it -p 8888:8888 -v "${PWD}:/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+docker run --rm -it -p 8888:8888 -v "${PWD}:/home/jovyan/work" viola1003/causality-analysis:v1.1.0
 ```
 
 Open the JupyterLab URL printed in the terminal. Inside the container, this
@@ -82,8 +82,8 @@ cd Causality-Analysis
 Run the Docker tutorial environment:
 
 ```powershell
-docker pull viola1003/causality-analysis:v1.0.0
-docker run --rm -it -p 8888:8888 -v "${PWD}:/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+docker pull viola1003/causality-analysis:v1.1.0
+docker run --rm -it -p 8888:8888 -v "${PWD}:/home/jovyan/work" viola1003/causality-analysis:v1.1.0
 ```
 
 ### macOS
@@ -108,8 +108,8 @@ Clone the repository and run JupyterLab in Docker:
 ```zsh
 git clone https://github.com/viola1003/Causality-Analysis.git
 cd Causality-Analysis
-docker pull viola1003/causality-analysis:v1.0.0
-docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+docker pull viola1003/causality-analysis:v1.1.0
+docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.1.0
 ```
 
 ### Linux / Ubuntu
@@ -134,8 +134,8 @@ Clone the repository and run JupyterLab in Docker:
 ```bash
 git clone https://github.com/viola1003/Causality-Analysis.git
 cd Causality-Analysis
-docker pull viola1003/causality-analysis:v1.0.0
-docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+docker pull viola1003/causality-analysis:v1.1.0
+docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.1.0
 ```
 
 ---
