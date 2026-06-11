@@ -1,6 +1,6 @@
-"""Unified interface for functional connectivity estimation methods.
+"""Unified interface for effective-connectivity estimation methods.
 
-Provides eight FC methods under a single ``FCMethods`` dispatcher class:
+Provides eight connectivity methods under the legacy ``FCMethods`` dispatcher class:
 
     VAR-based:          ADTF, PDC, DTF
     Phase-based:        PLI, PSI
@@ -25,7 +25,7 @@ import numpy as np
 from mne_connectivity import phase_slope_index, spectral_connectivity_epochs
 from statsmodels.tsa.vector_ar.var_model import VAR
 
-from core.mvarica import MVAR, connectivity_mvarica
+from core.mvarica import MVAR, connectivity_mvar, connectivity_mvarica
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,10 @@ class ADTFModel:
 
 
 class FCMethods:
-    """Dispatcher for all supported functional connectivity methods.
+    """Dispatcher for all supported effective-connectivity methods.
+
+    The class name is retained for backward compatibility with existing
+    notebooks and scripts.
 
     Parameters
     ----------
@@ -385,9 +388,14 @@ class FCMethods:
         n_fft: int = 128,
         threshold: float | None = None,
         integrate: bool = False,
+        use_ica: bool = False,
         **kwargs,
     ) -> np.ndarray:
-        """Shared MVARICA computation for PDC and DTF.
+        """Shared MVAR computation for PDC and DTF.
+
+        By default, PDC/DTF are computed in the observed channel space so their
+        matrix indices can be compared directly with simulation ground truth.
+        Set ``use_ica=True`` to run the legacy MVARICA source-space variant.
 
         Parameters
         ----------
@@ -405,6 +413,9 @@ class FCMethods:
             Zero out entries with absolute value below this threshold.
         integrate : bool
             If True, average the frequency-resolved matrix over all bins.
+        use_ica : bool
+            If True, transform the fitted MVAR model into ICA source space before
+            computing PDC/DTF. Default: False.
         **kwargs
             Passed to ``prepare_ica_params`` (e.g. ``ica_method``).
 
@@ -414,15 +425,23 @@ class FCMethods:
             Connectivity matrix, shape (n_channels, n_channels [, n_fft]).
         """
         preprocessor = BasePreprocessor(self.data)
-        ica_params = preprocessor.prepare_ica_params(ica_params, **kwargs)
         var_model = MVAR(model_order=model_order, delta=delta)
-        result = connectivity_mvarica(
-            preprocessor.data,
-            ica_params=ica_params,
-            measure_name=measure_name,
-            n_fft=n_fft,
-            var_model=var_model,
-        )
+        if use_ica:
+            ica_params = preprocessor.prepare_ica_params(ica_params, **kwargs)
+            result = connectivity_mvarica(
+                preprocessor.data,
+                ica_params=ica_params,
+                measure_name=measure_name,
+                n_fft=n_fft,
+                var_model=var_model,
+            )
+        else:
+            result = connectivity_mvar(
+                preprocessor.data,
+                measure_name=measure_name,
+                n_fft=n_fft,
+                var_model=var_model,
+            )
         if integrate:
             result = result.mean(axis=2)
         if threshold is not None:
@@ -430,10 +449,11 @@ class FCMethods:
         return result
 
     def _pdc_func(self, **kwargs) -> np.ndarray:
-        """Compute Partial Directed Coherence (PDC) via MVARICA.
+        """Compute Partial Directed Coherence (PDC).
 
         Keyword arguments are forwarded to ``_mvarica_func``. See its
-        docstring for the full parameter list.
+        docstring for the full parameter list. By default this uses the
+        observed channel space; pass ``use_ica=True`` for the MVARICA variant.
 
         Returns
         -------
@@ -443,10 +463,11 @@ class FCMethods:
         return self._mvarica_func("pdc", **kwargs)
 
     def _dtf_func(self, **kwargs) -> np.ndarray:
-        """Compute Directed Transfer Function (DTF) via MVARICA.
+        """Compute Directed Transfer Function (DTF).
 
         Keyword arguments are forwarded to ``_mvarica_func``. See its
-        docstring for the full parameter list.
+        docstring for the full parameter list. By default this uses the
+        observed channel space; pass ``use_ica=True`` for the MVARICA variant.
 
         Returns
         -------

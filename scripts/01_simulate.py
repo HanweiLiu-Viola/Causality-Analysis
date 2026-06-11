@@ -1,4 +1,4 @@
-"""Generate simulated multi-channel time-series for the FC benchmark.
+"""Generate simulated multi-channel time-series for the effective-connectivity benchmark.
 
 Produces data for all subjects, models, and epochs, then saves the result as a
 compressed NumPy archive at the path given by ``--output``.

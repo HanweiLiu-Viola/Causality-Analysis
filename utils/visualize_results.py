@@ -1,7 +1,7 @@
-"""Plotting utilities for functional connectivity results.
+"""Plotting utilities for effective-connectivity results.
 
 Provides thin wrappers around matplotlib/seaborn for the most common
-FC visualizations used in the benchmark and demo notebooks.
+connectivity visualizations used in the benchmark and demo notebooks.
 
 All functions save figures to disk and close them — they do not display
 interactively. Pass ``output_dir`` to control where files are written.

@@ -1,19 +1,19 @@
-"""Statistical validation tests for functional connectivity (FC) pipelines.
+"""Statistical validation tests for effective-connectivity (EC) pipelines.
 
 Three tests are implemented:
 
 1. ``bootstrap_performance``
-   Estimates confidence intervals for FC method performance scores
+   Estimates confidence intervals for EC method performance scores
    (AUC-ROC, Average Precision, or MCC) via non-parametric bootstrap
    resampling across subjects.
 
 2. ``surrogate_test``
    Assesses whether detected connectivity is significantly above chance
-   by comparing true FC scores against a null distribution built from
+   by comparing true EC scores against a null distribution built from
    phase-randomized surrogate time series.
 
 3. ``time_reversal_test``
-   Validates the directionality of FC estimates by comparing forward
+   Validates the directionality of EC estimates by comparing forward
    and time-reversed connectivity matrices. Genuine directed connections
    should change under time reversal; symmetric or noise-driven estimates
    should not.
@@ -204,7 +204,7 @@ def surrogate_test(
     seed: int = 42,
     metric: str = "auc",
 ) -> dict:
-    """Test whether FC estimates are significantly above a surrogate null.
+    """Test whether EC estimates are significantly above a surrogate null.
 
     A null distribution is built by computing the chosen performance metric
     on phase-randomized versions of the input data. The true score is then
@@ -296,8 +296,8 @@ def time_reversal_test(
     Returns
     -------
     dict with keys:
-        forward_matrix    : np.ndarray — FC matrix on original data
-        reversed_matrix   : np.ndarray — FC matrix on time-reversed data
+        forward_matrix    : np.ndarray — EC matrix on original data
+        reversed_matrix   : np.ndarray — EC matrix on time-reversed data
         asymmetry_index   : float — mean |forward - reversed| off-diagonal
         forward_score     : float or None — metric score on forward data
         reversed_score    : float or None — metric score on reversed data

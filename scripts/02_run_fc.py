@@ -1,7 +1,7 @@
-"""Run FC methods on benchmark data and evaluate against ground-truth adjacency.
+"""Run effective-connectivity methods on benchmark data and evaluate against ground-truth adjacency.
 
 Loads the benchmark NPZ produced by ``01_simulate.py``, runs all configured
-FC methods, computes MCC per subject / model / method, and saves the results
+effective-connectivity methods, computes MCC per subject / model / method, and saves the results
 as a pickle file.
 
 Called by the ``run_fc`` Snakemake rule.
@@ -41,7 +41,7 @@ from simulation.ground_truth import GROUND_TRUTH   # noqa: E402
 sys.path.insert(0, str(ROOT / "utils"))
 from metrics import binarize_matrix                # noqa: E402
 
-# Default FC method parameters (matching fc_benchmark.ipynb)
+# Default effective-connectivity method parameters (matching fc_benchmark.ipynb)
 DEFAULT_METHODS_PARAMS: dict[str, dict] = {
     "ADTF": {"fmin": 8, "fmax": 12, "n_freqs": 100, "maxlags": 10, "integrate": True},
     "PDC":  {"model_order": 5, "n_fft": 128, "ica_method": "infomax_extended", "integrate": True},
@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Entry point for the FC benchmark script."""
+    """Entry point for the effective-connectivity benchmark script."""
     args = parse_args()
 
     if not (0.0 < args.percentile < 100.0):

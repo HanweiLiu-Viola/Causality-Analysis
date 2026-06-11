@@ -1,4 +1,4 @@
-"""Evaluation utilities for functional connectivity benchmarks.
+"""Evaluation utilities for effective-connectivity benchmarks.
 
 Provides binarization and scoring helpers used by both scripts and notebooks.
 """
@@ -16,15 +16,15 @@ def binarize_matrix(
     *,
     percentile: float = 75.0,
 ) -> np.ndarray | None:
-    """Convert a raw FC result dict to a binary [source, target] adjacency matrix.
+    """Convert a raw connectivity result dict to a binary [source, target] adjacency matrix.
 
     Thresholds the top ``percentile`` percent of off-diagonal absolute values,
-    and handles the internal [target, source] convention used by most FC methods.
+    and handles the internal [target, source] convention used by most EC methods.
 
     Convention note
     ---------------
     Ground-truth matrices follow [source, target] (GT[i, j] = 1 → i drives j).
-    Most FC methods (ADTF, PDC, DTF, cGC, PLI) return [target, source] internally
+    Most EC methods (ADTF, PDC, DTF, cGC, PLI) return [target, source] internally
     and are transposed here. PSI already returns [source, target] and is not
     transposed.
 

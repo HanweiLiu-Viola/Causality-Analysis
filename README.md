@@ -2,36 +2,225 @@
 
 **Author:** Hanwei Liu
 **Institution:** University Hospital Würzburg (UKW)
-**Last Updated:** 2026-05-14
+**Last Updated:** 2026-06-10
 
 ---
 
-## Docker
+## Quick Start
 
-A pre-built image is available on DockerHub:
+Use Docker for manuscript reproduction because it gives every reader the same
+software stack. Use the native Conda setup when you want to modify code locally
+or develop the workflow.
+
+### Recommended: Docker + JupyterLab
+
+Clone the repository and enter the project directory:
 
 ```bash
-docker pull viola1003/causality-analysis:latest
+git clone https://github.com/HanweiLiu-Viola/Causality-Analysis.git
+cd Causality-Analysis
 ```
 
-Run with Jupyter on port 8888:
+Pull the pinned Docker image:
 
 ```bash
-docker run -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:latest
+docker pull viola1003/causality-analysis:v1.0.0
 ```
 
-Then open the URL printed in the terminal.
+Start JupyterLab from the container:
+
+```bash
+docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+```
+
+On Windows PowerShell, use `${PWD}` for the volume mount:
+
+```powershell
+docker run --rm -it -p 8888:8888 -v "${PWD}:/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+```
+
+Open the JupyterLab URL printed in the terminal. Inside the container, this
+repository is mounted at `/home/jovyan/work`.
+
+### Tutorial Notebook Order
+
+Run the notebooks in this order:
+
+| Order | Notebook | Purpose |
+|---|---|---|
+| 1 | `notebooks/00_startup.ipynb` | Check required tools and start from the container entry point. |
+| 2 | `notebooks/01_make_bids_data.ipynb` | Generate simulated BIDS EEG data. |
+| 3 | `notebooks/02_run_connectivity_analysis.ipynb` | Run the minimal effective-connectivity analysis. |
+| 4 | `notebooks/03_run_workflow.ipynb` | Preview the Snakemake workflow and verify outputs. |
+| 5 | `notebooks/04_connectivity_benchmark.ipynb` | Optional benchmark across models and methods. |
+| 6 | `notebooks/05_statistical_tests.ipynb` | Optional statistical validation examples. |
+
+---
+
+## Setup From Zero
+
+These steps assume you are starting from a clean machine.
+
+### Windows 11
+
+Install Git for Windows, Docker Desktop with the WSL2 backend, and
+Miniconda or Anaconda. Then open PowerShell:
+
+```powershell
+git --version
+docker --version
+conda --version
+```
+
+Clone the repository:
+
+```powershell
+git clone https://github.com/viola1003/Causality-Analysis.git
+cd Causality-Analysis
+```
+
+Run the Docker tutorial environment:
+
+```powershell
+docker pull viola1003/causality-analysis:v1.0.0
+docker run --rm -it -p 8888:8888 -v "${PWD}:/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+```
+
+### macOS
+
+Install Git, Docker Desktop, and Miniconda. If you use Homebrew:
+
+```zsh
+brew install git
+brew install --cask docker miniconda
+```
+
+Start Docker Desktop, then check the tools:
+
+```zsh
+git --version
+docker --version
+conda --version
+```
+
+Clone the repository and run JupyterLab in Docker:
+
+```zsh
+git clone https://github.com/viola1003/Causality-Analysis.git
+cd Causality-Analysis
+docker pull viola1003/causality-analysis:v1.0.0
+docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+```
+
+### Linux / Ubuntu
+
+Install Git, Docker Engine or Docker Desktop, and Miniconda. On Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install -y git ca-certificates curl
+```
+
+Install Docker using the current Docker documentation for your distribution,
+then verify that Docker is available:
+
+```bash
+docker --version
+docker run hello-world
+```
+
+Clone the repository and run JupyterLab in Docker:
+
+```bash
+git clone https://github.com/viola1003/Causality-Analysis.git
+cd Causality-Analysis
+docker pull viola1003/causality-analysis:v1.0.0
+docker run --rm -it -p 8888:8888 -v "$(pwd):/home/jovyan/work" viola1003/causality-analysis:v1.0.0
+```
+
+---
+
+## Native Conda Setup
+
+Use this path when you are developing locally without Docker.
+
+Create the notebook environment:
+
+```bash
+conda env create -f environment.yml
+conda activate fc_jupyter
+python -m ipykernel install --user --name fc_jupyter --display-name "Python (fc_jupyter)"
+```
+
+Create the Snakemake host environment:
+
+```bash
+conda env create -f environment_snakemake.yml
+```
+
+Launch JupyterLab:
+
+```bash
+conda activate fc_jupyter
+jupyter lab
+```
+
+Run the workflow dry-run:
+
+```bash
+conda run -n snakemake-host snakemake --dryrun
+```
+
+Run the full workflow:
+
+```bash
+conda run -n snakemake-host snakemake --cores 1
+```
+
+Run targeted workflow rules:
+
+```bash
+conda run -n snakemake-host snakemake --cores 1 bids_convert
+conda run -n snakemake-host snakemake --cores 1 connectivity_demo
+conda run -n snakemake-host snakemake --cores 1 simulate
+conda run -n snakemake-host snakemake --cores 1 run_fc
+```
+
+`fc_demo` is retained as a backward-compatible alias for `connectivity_demo`.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `docker` is not found | Install Docker Desktop or Docker Engine, start Docker, then reopen the terminal. |
+| Port `8888` is already in use | Change the host port, for example `-p 8889:8888`, then open the printed URL with port `8889`. |
+| Windows volume mount fails | Run the command from PowerShell in the repository directory and use `-v "${PWD}:/home/jovyan/work"`. |
+| Files are missing in Docker | Confirm the project is mounted at `/home/jovyan/work` inside JupyterLab. |
+| `snakemake` is not found | Create the host environment with `conda env create -f environment_snakemake.yml`, then run commands with `conda run -n snakemake-host ...`. |
+| `fc_jupyter` is missing | Create the notebook environment with `conda env create -f environment.yml`. |
+| `snakemake-host` is missing | Create it with `conda env create -f environment_snakemake.yml`. |
 
 ---
 ## 1. Project Overview
 
-This project implements and benchmarks a suite of **Functional Connectivity (FC)**
+This project implements and benchmarks a suite of **Effective Connectivity (EC)**
 methods for directed brain connectivity analysis. Given multichannel time-series data
-(real or simulated), each method estimates a connectivity matrix describing which
-signals influence which others and in which direction.
+(real or simulated), the main methods estimate a directed connectivity matrix
+describing which signals influence which others and in which direction.
 
-The pipeline is validated against synthetic models with known ground-truth causal
-structure, using the **Matthews Correlation Coefficient (MCC)** as the evaluation metric.
+The codebase still uses `fc` in some filenames, class names, workflow rules, and
+environment names for historical compatibility. In the manuscript context, the
+primary interpretation is effective connectivity. Directional methods such as
+ADTF, PDC, DTF, conditional Granger causality, PSI, and transfer entropy are the
+main focus; non-directional measures such as PLI or MI are retained only as
+comparison or auxiliary measures when they are used.
+
+The main tutorial notebook validates synthetic examples against known
+ground-truth causal structure using **AUC-ROC** and **Average Precision**.
+The optional benchmark notebook still reports **Matthews Correlation
+Coefficient (MCC)** for broader model/method comparisons.
 
 
 ---
@@ -42,7 +231,7 @@ structure, using the **Matthews Correlation Coefficient (MCC)** as the evaluatio
 Causality-Analysis/
 ├── src/
 │   ├── methods/
-│   │   └── fc_pipeline.py          # All FC methods (FCMethods class)
+│   │   └── fc_pipeline.py          # Connectivity methods (legacy FCMethods class name)
 │   ├── core/
 │   │   └── mvarica.py              # MVAR model + ICA + MVARICA pipeline
 │   ├── simulation/
@@ -51,10 +240,14 @@ Causality-Analysis/
 │       ├── brain_data.py           # MNE-based EEG/MEG data loader
 │       └── mne_loader.py           # MNEData class (lazy load, caching)
 ├── notebooks/
-│   ├── fc_benchmark.ipynb          # Multi-subject, multi-model benchmark
-│   └── fc_random_demo.ipynb        # Thesis-quality demo on the random model
+│   ├── 00_startup.ipynb            # Environment checks and container entry point
+│   ├── 01_make_bids_data.ipynb     # Generate simulated BIDS EEG data
+│   ├── 02_run_connectivity_analysis.ipynb  # Minimal random-model EC analysis
+│   ├── 03_run_workflow.ipynb       # Snakemake workflow dry run and output checks
+│   ├── 04_connectivity_benchmark.ipynb     # Optional benchmark notebook
+│   └── 05_statistical_tests.ipynb  # Optional statistical validation notebook
 ├── figures/                        # Exported PDF + PNG figures
-├── data/                           # Simulated data + MCC results (.npz, .pkl)
+├── data/                           # Simulated data + benchmark/results files
 ├── requirements.txt                # Python dependencies
 ├── pyproject.toml                  # Package metadata (src/ layout)
 └── PROJECT_DESCRIPTION.md          # This file
@@ -92,14 +285,14 @@ All models apply z-score normalization (`zscore_normalize`) before returning.
 
 ---
 
-## 4. FC Methods (`fc_pipeline.py`)
+## 4. Effective Connectivity Methods (`fc_pipeline.py`)
 
 ### 4.1 Class Structure
 
 ```
 BasePreprocessor          — standardizes data to (epochs, nodes, time)
 ADTFModel                 — VAR fitting + transfer matrix + ADTF computation
-FCMethods                 — unified interface; calls _<method>_func per method
+FCMethods                 — legacy class name; calls _<method>_func per method
 ```
 
 ### 4.2 Available Methods
@@ -110,59 +303,26 @@ FCMethods                 — unified interface; calls _<method>_func per method
 | `PDC` | `_pdc_func` | `[target, source]` | Partial Directed Coherence via MVARICA |
 | `DTF` | `_dtf_func` | `[target, source]` | Directed Transfer Function via MVARICA |
 | `cGC` | `_cgc_func` | `[target, source]` | Conditional Granger Causality via VAR residuals |
-| `PLI` | `_pli_func` | `[target, source]` (symmetric) | Phase Lag Index via MNE; symmetrized |
+| `PLI` | `_pli_func` | `[target, source]` (symmetric) | Phase Lag Index via MNE; non-directional comparison measure |
 | `PSI` | `_psi_func` | `[source, target]` | Phase Slope Index via MNE; all pairs |
 | `TE` | `_te_func` | IDTxl result | Multivariate Transfer Entropy (IDTxl) |
-| `MI` | `_mi_func` | IDTxl result | Multivariate Mutual Information (IDTxl) |
+| `MI` | `_mi_func` | IDTxl result | Multivariate Mutual Information (IDTxl); non-directional comparison measure |
 
+## 5. Tutorial Notebooks
 
-## 5. Notebook 1: `fc_benchmark.ipynb`
+The main tutorial uses four notebooks with simple, sequential names. Two
+additional notebooks provide optional benchmark and statistical validation
+material.
 
-**Purpose:** Systematic multi-subject, multi-model benchmark to quantify FC method performance.
+| Notebook | Purpose | Manuscript step |
+|---|---|---|
+| `00_startup.ipynb` | Check required tools and start the pinned Docker container. | Section 7.2 |
+| `01_make_bids_data.ipynb` | Generate five simulated subjects and write a BIDS-compatible EEG dataset. | Section 7.3 |
+| `02_run_connectivity_analysis.ipynb` | Run the minimal random-model effective-connectivity analysis and save figures. | Section 7.1 |
+| `03_run_workflow.ipynb` | Preview the Snakemake workflow and verify expected outputs. | Section 7.5 |
+| `04_connectivity_benchmark.ipynb` | Optional benchmark across models and EC methods. | Extension |
+| `05_statistical_tests.ipynb` | Optional bootstrap, surrogate, and time-reversal validation examples. | Extension |
 
-### Tasks Completed
-
-1. **Data Generation**
-   - Parameters: `N_SUBJECTS=25`, `N_EPOCHS=5`, `N_NODES=5`, `T=1000`, `FS=256`
-   - 7 models: `random, henon, lorenz, sweep, cascadear, freqarlin, freqarnonlin`
-   - Seeds fixed as `subj*100 + model_id*10 + epoch` for full reproducibility
-   - Data shape: `(25, 7, 5, 5, 1000)`, saved as `.npz`
-
-2. **FC Computation**
-   - Methods: ADTF, PDC, DTF, cGC, PLI, PSI
-   - ADTF: alpha band 8–12 Hz, `maxlags=10`, mean over band (not trapz integral)
-   - PDC/DTF: MVARICA with Extended Infomax ICA, `model_order=5`, `n_fft=128`
-   - Quick sanity check on Subject 0 / Model 0 with visualization
-
-3. **MCC Evaluation**
-   - Ground truth adjacency matrices defined for all 9 models
-   - Binarization: top-25% percentile threshold on off-diagonal values (in source→target space)
-   - All non-PSI matrices transposed before thresholding to match GT convention
-   - Results: violin plots per model + mean MCC heatmap (models × methods)
-
-### Key Parameters
-
-```python
-METHODS_PARAMS = {
-    "ADTF":  {"fmin": 8, "fmax": 12, "n_freqs": 100, "maxlags": 10, "integrate": True},
-    "PDC": {"model_order": 5, "n_fft": 128, "ica_method": "infomax_extended", "integrate": True},
-    "DTF":   {"model_order": 5, "n_fft": 128, "ica_method": "infomax_extended", "integrate": True},
-    "cGC":   {},
-    "PLI":   {"fmin": 8, "fmax": 12, "integrate": True},
-    "PSI":   {"fmin": 8, "fmax": 12, "integrate": True},
-}
-```
-
----
-
-## 6. Notebook 2: `fc_random_demo.ipynb`
-
-**Purpose:** Thesis-quality demonstration of all FC methods on the *random* simulation model
-
-### Tasks Completed
-
-**Data Generation** 
-- Random model parameters: `N_EPOCHS=10`, `T=1000`, `FS=256`, `SEED=42`
-- True edges: x1→x2 (Δ=3), x1→x3 (Δ=2), x4→x5 (Δ=5)
-- Data shape: `(10, 5, 1000)`,
-
+Start with `notebooks/00_startup.ipynb`. The benchmark and statistical
+validation notebooks are retained as development/extension material, but they
+are not required for the Section 7 tutorial.

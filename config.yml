@@ -12,11 +12,11 @@ n_subjects: 25
 # Number of independent epochs (time segments) generated per subject per model.
 n_epochs: 5
 
-# Time points per epoch (samples). Higher values improve FC estimation accuracy
+# Time points per epoch (samples). Higher values improve EC estimation accuracy
 # but increase computation time proportionally.
 t: 1000
 
-# Sampling frequency in Hz. Must match the frequency ranges used in FC methods
+# Sampling frequency in Hz. Must match the frequency ranges used in EC methods
 # (e.g. alpha band 8–12 Hz, gamma band 25+ Hz).
 fs: 256
 
@@ -34,13 +34,13 @@ models:
   - freqarlin
   - freqarnonlin
 
-# ── FC benchmark parameters ───────────────────────────────────────────────────
+# ── Effective-connectivity benchmark parameters ───────────────────────────────
 
 # Binarisation threshold: top-N% of off-diagonal absolute values are set to 1.
 # Range: (0, 100). Typical values: 75 (conservative) to 90 (strict).
 percentile: 75
 
-# FC methods to run in the Snakemake benchmark. Valid names:
+# EC methods to run in the Snakemake benchmark. Valid names:
 #   ADTF, PDC, DTF, cGC, PLI, PSI
 # TE and MI (Transfer Entropy, Mutual Information) are implemented in
 # src/methods/fc_pipeline.py but require IDTxl and are excluded here

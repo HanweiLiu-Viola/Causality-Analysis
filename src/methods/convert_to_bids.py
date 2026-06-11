@@ -46,7 +46,7 @@ _DEFAULT_CH_NAMES: list[str] = [f"x{i + 1}" for i in range(5)]
 
 def init_dataset(
     bids_root: str | Path,
-    name: str = "Simulated Functional Connectivity Dataset",
+    name: str = "Simulated Effective Connectivity Dataset",
     authors: list[str] | None = None,
     readme_extra: str = "",
 ) -> None:
@@ -98,8 +98,8 @@ def _write_readme(bids_root: Path, name: str, extra: str) -> None:
         f"{name}\n"
         f"{'=' * len(name)}\n\n"
         "Simulated multi-channel EEG time-series with known ground-truth\n"
-        "directed connectivity, generated for benchmarking functional\n"
-        "connectivity (FC) estimation methods.\n\n"
+        "directed connectivity, generated for benchmarking effective\n"
+        "connectivity (EC) estimation methods.\n\n"
         "Channel names (x1–x5) are intentionally non-standard to indicate\n"
         "that the signals are simulated and do not correspond to real\n"
         "electrode positions.\n\n"

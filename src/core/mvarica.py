@@ -358,7 +358,7 @@ def connectivity_mvarica(
     coeffs = np.asarray(source_model.coeff)
     n_channels = coeffs.shape[0]
     model_order = coeffs.shape[1] // n_channels
-    coeffs_reshaped = np.reshape(coeffs, (n_channels, n_channels, model_order), order="F")
+    coeffs_reshaped = np.reshape(coeffs, (n_channels, n_channels, model_order), order="C")
 
     # Spectral representation: FFT of [I, -A_1, ..., -A_p] over (2*n_fft-1) points,
     # then keep only the first n_fft bins (causal / positive-frequency part).
@@ -387,6 +387,52 @@ def connectivity_mvarica(
         return np.abs(
             transfer_h / np.sqrt(np.sum(transfer_h * transfer_h.conj(), axis=1, keepdims=True))
         )
+
+    raise ValueError(
+        f"Unknown measure {measure_name!r}. "
+        "Valid options: 'mvar_spectral', 'mvar_tf', 'pdc', 'dtf'."
+    )
+
+
+def connectivity_mvar(
+    real_signal: np.ndarray,
+    measure_name: str,
+    n_fft: int = 512,
+    var_model: MVAR = MVAR,
+) -> np.ndarray:
+    """Estimate PDC or DTF directly in the observed channel space.
+
+    This path should be used when outputs are compared against ground-truth
+    adjacency matrices defined over the original simulated channels. MVARICA
+    rotates the model into ICA source space, so its component indices do not
+    necessarily correspond to the original channel labels.
+    """
+    fitted_model = var_model.fit(real_signal)
+
+    coeffs = np.asarray(fitted_model.coeff)
+    n_channels = coeffs.shape[0]
+    model_order = coeffs.shape[1] // n_channels
+    coeffs_reshaped = np.reshape(coeffs, (n_channels, n_channels, model_order), order="C")
+
+    spectral_a = fft(
+        np.dstack([np.eye(n_channels), -coeffs_reshaped]),
+        n_fft * 2 - 1,
+    )[:, :, :n_fft]
+    transfer_h = np.array([
+        np.linalg.solve(a_f, np.eye(n_channels)) for a_f in spectral_a.T
+    ]).T
+
+    name = measure_name.lower()
+    if name == "mvar_spectral":
+        return spectral_a
+    if name == "mvar_tf":
+        return transfer_h
+    if name == "pdc":
+        denom = np.sqrt(np.sum(spectral_a.conj() * spectral_a, axis=0, keepdims=True))
+        return np.abs(spectral_a / denom)
+    if name == "dtf":
+        denom = np.sqrt(np.sum(transfer_h * transfer_h.conj(), axis=1, keepdims=True))
+        return np.abs(transfer_h / denom)
 
     raise ValueError(
         f"Unknown measure {measure_name!r}. "

@@ -4,47 +4,42 @@
 #
 # Run from the repo root in the activated snakemake-host environment:
 #
-#   snakemake --cores 1              # full run  (all rules)
-#   snakemake --cores 1 simulate     # data generation only
-#   snakemake --cores 1 run_fc       # FC benchmark only
-#   snakemake --cores 1 bids_convert # BIDS conversion only
-#   snakemake --cores 1 fc_demo      # demo notebook + figures only
+#   snakemake --cores 1                    # tutorial outputs
+#   snakemake --cores 1 bids_convert       # BIDS conversion only
+#   snakemake --cores 1 connectivity_demo  # tutorial notebook + figures only
+#   snakemake --cores 1 simulate           # optional benchmark data generation
+#   snakemake --cores 1 run_fc             # optional legacy MCC benchmark
 #   snakemake --dryrun               # preview without executing
 #   snakemake --forceall --cores 1   # re-run everything
 #
 # DAG:
-#   simulate ──► run_fc
-#   simulate ──► (data re-generated inside notebook) ──► fc_demo
-#   bids_convert   (independent: generates its own 5-subject data internally)
+#   connectivity_demo  (independent: generates data internally via simulation functions)
+#   bids_convert       (independent: generates its own 5-subject data internally)
+#   simulate ──► run_fc  (optional legacy benchmark)
 # ─────────────────────────────────────────────────────────────────────────────
 
 configfile: "config.yml"
-container: "docker://viola1003/causality-analysis:1.0"
+container: "docker://viola1003/causality-analysis:v1.0.0"
 
 # ── Derived constants ─────────────────────────────────────────────────────────
 _PY = "python"
 
-# Figure files produced by fc_random_demo.ipynb
+# Figure files produced by notebooks/02_run_connectivity_analysis.ipynb
 DEMO_FIGS = [
     "fig1_ground_truth",
     "fig2_time_series",
-    "fig3_ground_truth_matrix",
     "fig4_fc_matrix_grid",
-    "fig4b_mcc_bar",
-    "fig5_mcc_bar",
     "fig5_auc_roc_avg_precision",
     "fig5_lag_estimation",
+    "fig6_pdc_freq_profile",
     "fig6_dtf_freq_profile",
-    "fig6_pdcoh_freq_profile",
 ]
 
 
 # ── Rule: all (default target) ────────────────────────────────────────────────
 rule all:
-    """Build every pipeline output."""
+    """Build the tutorial outputs."""
     input:
-        "data/simulated_connectivity_benchmark.npz",
-        "data/mcc_benchmark.pkl",
         "data/bids/dataset_description.json",
         expand("figures/{fig}.pdf", fig=DEMO_FIGS),
 
@@ -81,7 +76,7 @@ rule simulate:
 # ── Rule 2: run_fc ────────────────────────────────────────────────────────────
 rule run_fc:
     """
-    Run all FC methods on the benchmark data and evaluate against ground-truth
+    Run all effective-connectivity methods on the benchmark data and evaluate against ground-truth
     adjacency matrices using MCC (scripts/02_run_fc.py).
 
     Input  : data/simulated_connectivity_benchmark.npz
@@ -114,8 +109,8 @@ rule run_fc:
 # ── Rule 3: bids_convert ──────────────────────────────────────────────────────
 rule bids_convert:
     """
-    Execute notebooks/01_bids_conversion.ipynb and write the executed
-    version to logs/01_bids_conversion_executed.ipynb.
+    Execute notebooks/01_make_bids_data.ipynb and write the executed
+    version to logs/01_make_bids_data_executed.ipynb.
 
     Generates 5 simulated subjects (random model) and writes a BIDS-compliant
     EEG dataset to data/bids/.  Channel names are kept as x1-x5 so it is
@@ -128,35 +123,43 @@ rule bids_convert:
     log:
         "logs/bids_convert.log",
     shell:
+        "cd notebooks && "
         "conda run --no-capture-output -n fc_jupyter "
         "jupyter nbconvert --to notebook --execute "
         "--ExecutePreprocessor.timeout=3600 "
-        "--output-dir logs/ "
-        "--output 01_bids_conversion_executed "
-        "notebooks/01_bids_conversion.ipynb "
-        "> {log} 2>&1"
+        "--output-dir ../logs/ "
+        "--output 01_make_bids_data_executed "
+        "01_make_bids_data.ipynb "
+        "> ../{log} 2>&1"
         
 
-# ── Rule 4: fc_demo ───────────────────────────────────────────────────────────
-rule fc_demo:
+# ── Rule 4: connectivity_demo ─────────────────────────────────────────────────
+rule connectivity_demo:
     """
-    Execute notebooks/fc_random_demo.ipynb and write the executed
-    version to logs/fc_random_demo_executed.ipynb.
+    Execute notebooks/02_run_connectivity_analysis.ipynb and write the executed
+    version to logs/02_run_connectivity_analysis_executed.ipynb.
     
-    Runs all FC methods on the random model and saves publication-quality
-    figures to figures/ (PDF + PNG at 300 dpi).
+    Runs the tutorial effective-connectivity analysis on the random model and
+    saves publication-quality figures to figures/ (PDF + PNG at 600 dpi).
 
-    Output : figures/fig1_ground_truth.pdf  …  figures/fig6_pdcoh_freq_profile.pdf
+    Output : figures/fig1_ground_truth.pdf  …  figures/fig6_dtf_freq_profile.pdf
     """
     output:
         expand("figures/{fig}.pdf", fig=DEMO_FIGS),
     log:
-        "logs/fc_demo.log",
+        "logs/connectivity_demo.log",
     shell:
+        "cd notebooks && "
         "conda run --no-capture-output -n fc_jupyter "
         "jupyter nbconvert --to notebook --execute "
         "--ExecutePreprocessor.timeout=3600 "
-        "--output-dir logs/ "
-        "--output fc_random_demo_executed "
-        "notebooks/fc_random_demo.ipynb "
-        "> {log} 2>&1"
+        "--output-dir ../logs/ "
+        "--output 02_run_connectivity_analysis_executed "
+        "02_run_connectivity_analysis.ipynb "
+        "> ../{log} 2>&1"
+
+
+# Backward-compatible alias for older commands.
+rule fc_demo:
+    input:
+        rules.connectivity_demo.output
